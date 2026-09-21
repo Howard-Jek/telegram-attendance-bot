@@ -187,12 +187,20 @@ Follow https://core.telegram.org/bots/webapps (validating data received via the 
 - status also returns sessionMinutes (for the "Start check-in (N min)" label).
 - Mini App colours come from Telegram theme params. In JS, their lightness (OKLCH) is adjusted until they reach WCAG AA against the live theme, which keeps the theme's hue.
 - One automatic retry after 2 s on BUSY or an unreadable response, such as Apps Script's HTML overload page.
-- **Location order (departs from "LocationManager first").** On Android, Telegram's LocationManager returns the phone's cached last-known fix of any age (DrKLO/Telegram BotLocation.requestObject). So on Android the page asks the WebView's geolocation first (enableHighAccuracy, maximumAge 0) and falls back to LocationManager.
-- On iOS, LocationManager comes first. If it stays silent for 10 s (iOS sends nothing when Telegram lacks the phone's location permission), browser geolocation is tried, which fails fast in that case. Browser geolocation is also used when LocationManager is unavailable (clients before Bot API 8.0) or reports no accuracy.
-- A null LocationManager answer with access already granted means the phone's Location is off. The page shows "turn on Location" without Open settings, which would do nothing in that case.
-- On iOS, returning from Telegram's settings (the `activated` event) retries once.
-- Failure screens during a check-in carry a "NOT CHECKED IN" label, so a failure never reads as success. A very coarse accuracy (over 1 km) gets advice to turn on Precise Location.
+- **Location order.** LocationManager comes first on every platform, as the spec says, because it needs no extra prompt after the first run.
+  - **Android stale fixes.** Telegram for Android answers with the phone's cached last-known fix, of any age (DrKLO/Telegram BotLocation.requestObject). So when an Android fix from LocationManager is rejected as OUT_OF_RANGE or LOW_ACCURACY, the page gets one fresh fix from the WebView's geolocation (enableHighAccuracy, maximumAge 0) and submits again.
+    - The fresh fix costs a Telegram "allow location" prompt, because Telegram clears WebView location grants on every open, which is why it isn't the default.
+    - Side effect: the stale attempt leaves a Rejected row just before the successful Log row.
+  - **iOS silent answer.** iOS sends nothing when Telegram lacks the phone's location permission. Once the bot has asked before, the page tries browser geolocation after 10 s, which fails fast in that case. A late Telegram answer still wins within a 5 s grace period.
+  - **Browser fallback.** Browser geolocation is also used when LocationManager is unavailable (clients before Bot API 8.0) or reports no accuracy.
+- **Location switched off.** A null LocationManager answer with access already granted means the phone's Location is off. The page shows "turn on Location" without Open settings, which would do nothing in that case.
+- **Coming back from settings.** After Open settings, Try again becomes the primary button. Android also retries automatically when it reports the permission change. iOS reports nothing, so an `activated` event is only a best-effort retry.
+- Failure screens during a check-in carry a "NOT CHECKED IN" label and a red ✕ ring that mirrors the stamp, so a failure never reads as success.
+- A network failure during a check-in is shown as "Not confirmed" with a neutral mark, because the server may have recorded it.
+- A very coarse accuracy (over 1 km) gets advice to turn on Precise Location.
 - If telegram-web-app.js fails to load inside Telegram, the page offers Reload instead of the "open from Telegram" copy.
 - A double tap on Start opens at most one confirmation.
-- Focus follows the screen for keyboard and screen-reader users.
+- Focus follows the screen for keyboard and screen-reader users, and a status line speaks one sentence per change.
 - After 8 s of loading, the page shows "Still working".
+- Type is set in rem: iPhones follow the user's Text Size setting, and the stamp grows with the text.
+- The action button is sticky, so it stays reachable when large text makes a screen taller than the phone.

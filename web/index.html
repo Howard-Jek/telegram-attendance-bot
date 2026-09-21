@@ -12,7 +12,8 @@
   :root {
     --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
-    --t-small: 13px; --t-label: 15px; --t-body: 16px; --t-button: 19px; --t-title: 25px; --t-stamp: 49px;
+    /* rem, so iOS Dynamic Type (html.ios below) scales the page; 1rem = 16px elsewhere. */
+    --t-small: 0.8125rem; --t-label: 0.9375rem; --t-body: 1rem; --t-button: 1.1875rem; --t-title: 1.5625rem; --t-stamp: 3.0625rem;
     --r-control: 12px;
     --ease: cubic-bezier(0.2, 0, 0, 1);
 
@@ -49,6 +50,7 @@
 
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--text); }
+  html.ios { font: -apple-system-body; } /* the user's iOS Text Size setting becomes 1rem */
   body {
     font: 400 var(--t-body)/1.5 var(--font);
     -webkit-font-smoothing: antialiased;
@@ -66,7 +68,7 @@
     min-height: 100vh;
     min-height: var(--tg-viewport-stable-height, 100dvh);
     margin: 0 auto;
-    padding: var(--s5) var(--s4) calc(var(--s4) + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    padding: var(--s5) var(--s4) 0;
   }
   .screen {
     flex: 1;
@@ -86,18 +88,26 @@
   .title:focus { outline: none; }
   .title:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 4px; border-radius: 4px; }
   .line { margin: 0; max-width: 32em; text-wrap: pretty; }
-  .hint { margin: 0; max-width: 34em; font-size: var(--t-small); color: var(--muted); text-wrap: pretty; }
+  .hint { margin: 0; max-width: 34em; font-size: var(--t-label); color: var(--muted); text-wrap: pretty; }
   .meta, .notice {
     margin: 0;
     padding: var(--s2) var(--s4);
-    border-radius: var(--s4); /* a pill on one line, a soft box when a long name wraps */
-    background: var(--surface-ui);
-    font-size: var(--t-small);
+    font-size: var(--t-label);
     font-weight: 600;
     text-wrap: pretty;
   }
-  .notice { display: flex; gap: var(--s2); align-items: flex-start; text-align: left; }
-  .notice svg { flex: none; width: 16px; height: 16px; margin-top: 2px; fill: none; stroke: var(--danger-ink); stroke-width: 2.25; stroke-linecap: round; }
+  .meta { border-radius: var(--s4); background: var(--surface-ui); } /* a pill on one line, a soft box when a long name wraps */
+  .notice {
+    display: flex;
+    gap: var(--s2);
+    align-items: flex-start;
+    border-radius: var(--r-control);
+    background: color-mix(in srgb, var(--danger-ink) 10%, var(--bg));
+    text-align: left;
+  }
+  .notice svg { flex: none; width: 1em; height: 1em; margin-top: 0.25em; fill: none; stroke: var(--danger-ink); stroke-width: 2.25; stroke-linecap: round; }
+  .placeholder { visibility: hidden; } /* keeps loading screens the same height, so the spinner doesn't jump */
+  .outcome.is-unknown { color: var(--text); }
 
   .mark {
     position: relative;
@@ -147,24 +157,41 @@
     gap: var(--s1);
     width: max(184px, 3.8em);
     height: max(184px, 3.8em);
-    border: 3px solid var(--accent-ink);
+    border: 3px solid var(--accent-text);
     border-radius: 50%;
     font-size: var(--t-stamp);
-    color: var(--accent-ink);
+    color: var(--accent-text);
     transform: rotate(-4deg);
   }
   .stamp::before {
     content: "";
     position: absolute;
     inset: var(--s2);
-    border: 1px solid var(--accent-ink);
+    border: 1px solid var(--accent-text);
     border-radius: 50%;
   }
   .stamp-label { font-size: var(--t-small); color: var(--accent-text); }
   .stamp-time { font-size: 1em; font-weight: 800; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
 
-  .actions { display: flex; flex-direction: column; gap: var(--s3); padding-top: var(--s5); }
-  .actions:empty { display: none; }
+  /* Sticky, so the one action stays reachable when large text makes the screen taller than the phone. */
+  .actions {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s3);
+    padding: var(--s5) 0 calc(var(--s4) + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    background: var(--bg);
+  }
+  .actions:empty { padding: 0 0 var(--s4); }
+  @media (max-height: 620px) {
+    .app { padding-top: var(--s3); }
+    .screen { gap: var(--s3); }
+    .mark { width: 72px; height: 72px; }
+    .mark svg { width: 32px; height: 32px; }
+    .mark[data-tone="no"] { width: 96px; height: 96px; }
+    .mark[data-tone="no"] svg { width: 40px; height: 40px; }
+  }
   .btn {
     appearance: none;
     width: 100%;
@@ -181,7 +208,7 @@
   .btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
   .btn:active { transform: scale(0.98); filter: brightness(0.92); }
   .btn:disabled { cursor: default; opacity: 0.55; }
-  @media (hover: hover) { .btn:not(:disabled):hover { filter: brightness(0.95); } }
+  @media (hover: hover) { .btn:not(:disabled):hover { filter: brightness(0.9); } }
 
   @media (prefers-reduced-motion: no-preference) {
     .spinner { animation: spin 0.9s linear infinite; }
@@ -276,7 +303,8 @@
         line: 'The bot owner still needs to set API_URL in web/index.html.' };
     },
     loading: function (title, hint, slowHint) {
-      return { state: 'loading', spinner: true, title: title, hint: hint, slowHint: slowHint, meta: sessionMeta() };
+      // Loading screens always keep a meta and a hint row (hidden when empty) so their height is fixed.
+      return { state: 'loading', spinner: true, title: title, hint: hint || '', slowHint: slowHint, meta: sessionMeta(), reserve: true };
     },
     noSession: function () {
       return { state: 'no-session', icon: 'clock', title: 'No check-in open right now',
@@ -284,7 +312,7 @@
     },
     closed: function () {
       return { state: 'closed', icon: 'x', tone: 'no', outcome: NOT_CHECKED_IN, title: 'Check-in closed before you got in',
-        line: 'This check-in has closed. If you were there, ask an admin.',
+        line: 'If you were there, ask an admin to add you.',
         actions: [{ label: 'Done', onClick: closeApp }] };
     },
     adminIdle: function () {
@@ -295,16 +323,23 @@
         actions: [{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }] };
     },
     adminStarted: function (data) {
-      // Admins are not checked in automatically, so their own status must not read as done.
-      var actions = [{ label: 'Check in', primary: true, onClick: checkIn }];
-      if (data.warning && data.shareLink) actions.push({ label: 'Share check-in link', onClick: function () { share(data.shareLink); } });
-      return { state: 'admin-started', icon: 'flag', tone: 'good', title: 'Check-in started',
+      // Admins are not checked in automatically, so their own status must not read as done. If the
+      // group announcement failed, nobody knows the check-in is open, so sharing the link comes first.
+      var checkInAction = { label: 'Check in', primary: true, onClick: checkIn };
+      var actions = [checkInAction];
+      if (data.warning && data.shareLink) {
+        checkInAction.primary = false;
+        actions = [{ label: 'Share check-in link', primary: true, onClick: function () { share(data.shareLink); } }, checkInAction];
+      }
+      return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
         line: 'You’re not checked in yet. Tap Check in when you’re at the venue.',
         meta: 'Open until ' + data.closesAtText, notice: data.warning, actions: actions };
     },
     ready: function (line) {
+      var s = status && status.activeSession;
       return { state: 'ready', icon: 'pin', title: 'Check-in is open',
-        line: line || 'Tap Check in when you’re at the venue.', meta: sessionMeta(),
+        line: line || 'Tap Check in when you’re at the venue.',
+        meta: line && s ? 'Open until ' + s.closesAtText : sessionMeta(), // the line already names the starter
         actions: [{ label: 'Check in', primary: true, onClick: checkIn }] };
     },
     checkedIn: function (atText, closesAtText, isNew) {
@@ -322,26 +357,32 @@
         BUSY: 'Busy right now',
         NETWORK: 'Couldn’t reach the server',
       };
+      // Lines are built from the numbers, so they add to the title instead of repeating it.
       var line = res.message;
       var d = res.data || {};
       if (res.code === 'LOW_ACCURACY' && d.accuracyM > APPROXIMATE_M) {
         line = 'Your phone is sharing an approximate location (±' + metres(d.accuracyM) +
           '). Turn on Precise Location for Telegram in your phone’s settings, then try again.';
-      }
-      if (res.code === 'OUT_OF_RANGE' && d.distanceM >= 1000) {
-        line = 'You’re ' + metres(d.distanceM) + ' from the venue. Check-in works within ' + d.radiusM + ' m.';
+      } else if (res.code === 'LOW_ACCURACY' && d.accuracyM && d.maxAccuracyM) {
+        line = 'Accuracy ±' + metres(d.accuracyM) + ' (needs ±' + metres(d.maxAccuracyM) + '). Move outdoors or near a window, then try again.';
+      } else if (res.code === 'OUT_OF_RANGE' && d.distanceM && d.radiusM) {
+        line = 'You’re ' + metres(d.distanceM) + ' from the venue. Check-in works within ' + metres(d.radiusM) + '.';
+      } else if (res.code === 'NOT_MEMBER') {
+        line = 'Only members of this group can check in. Just joined? Try again in a minute.';
+      } else if (res.code === 'BUSY') {
+        line = 'Lots of people are checking in. Try again in a few seconds.';
       }
       var outcome = '';
-      if (duringCheckIn) {
-        // After a network failure the server may still have recorded it, so don't claim a "no".
-        if (res.code === 'NETWORK') {
-          outcome = 'Not confirmed';
-          line = 'We couldn’t confirm your check-in. Try again — you won’t be counted twice.';
-        } else {
-          outcome = NOT_CHECKED_IN;
-        }
+      var unknown = duringCheckIn && res.code === 'NETWORK';
+      if (unknown) {
+        // After a network failure the server may still have recorded it, so this is not a "no".
+        outcome = 'Not confirmed';
+        line = 'We couldn’t confirm your check-in. Try again — you won’t be counted twice.';
+      } else if (duringCheckIn) {
+        outcome = NOT_CHECKED_IN;
       }
-      return { state: 'failed', icon: duringCheckIn ? 'x' : 'alert', tone: duringCheckIn ? 'no' : 'bad', outcome: outcome,
+      var no = duringCheckIn && !unknown;
+      return { state: 'failed', icon: no ? 'x' : 'alert', tone: no ? 'no' : 'bad', outcome: outcome, outcomeUnknown: unknown,
         title: titles[res.code] || 'Something went wrong', line: line, meta: sessionMeta(),
         actions: [{ label: 'Try again', primary: true, onClick: retry }] };
     },
@@ -382,8 +423,13 @@
     fitTheme();
     if (!tg) {
       // Opened by Telegram (launch data in the URL) but its script failed to load, e.g. on flaky Wi-Fi.
-      return render(/tgWebAppData=/.test(location.hash) ? views.sdkFailed() : views.outside());
+      if (/tgWebAppData=/.test(location.hash)) {
+        themeFromLaunchUrl();
+        return render(views.sdkFailed());
+      }
+      return render(views.outside());
     }
+    if (tg.platform === 'ios') document.documentElement.classList.add('ios');
     if (!tg.initData) return render(views.outside());
     tg.ready();
     tg.expand();
@@ -404,6 +450,19 @@
     if (PHONE_PLATFORMS.indexOf(tg.platform) === -1) return render(views.desktop());
     if (API_URL.indexOf('PASTE_') !== -1) return render(views.notConnected());
     loadStatus(true);
+  }
+
+  // Telegram passes the theme in the launch URL too; use it when its script could not load.
+  function themeFromLaunchUrl() {
+    try {
+      var m = /[#&]tgWebAppThemeParams=([^&]*)/.exec(location.hash);
+      var theme = m ? JSON.parse(decodeURIComponent(m[1])) : null;
+      if (!theme) return;
+      Object.keys(theme).forEach(function (k) {
+        document.documentElement.style.setProperty('--tg-theme-' + k.split('_').join('-'), theme[k]);
+      });
+      fitTheme();
+    } catch (e) { /* keep the fallback palette */ }
   }
 
   function loadStatus(autoCheckIn, readyLine) {
@@ -713,7 +772,7 @@
     clear(screenEl);
     screenEl.appendChild(view.stamp ? stampEl(view.stamp, view.stampIsNew) : markEl(view));
     if (view.outcome) {
-      var outcome = el('p', 'outcome', view.outcome);
+      var outcome = el('p', 'outcome' + (view.outcomeUnknown ? ' is-unknown' : ''), view.outcome);
       outcome.setAttribute('aria-hidden', 'true'); // announced through the title
       screenEl.appendChild(outcome);
     }
@@ -725,9 +784,9 @@
     title.tabIndex = -1;
     screenEl.appendChild(title);
     if (view.line) screenEl.appendChild(el('p', 'line', view.line));
-    if (view.meta) screenEl.appendChild(el('p', 'meta', view.meta));
+    if (view.meta || view.reserve) screenEl.appendChild(el('p', 'meta' + (view.meta ? '' : ' placeholder'), view.meta || '\u00a0'));
     if (view.notice) screenEl.appendChild(noticeEl(view.notice));
-    if (view.hint) screenEl.appendChild(el('p', 'hint', view.hint));
+    if (view.hint || view.reserve) screenEl.appendChild(el('p', 'hint' + (view.hint ? '' : ' placeholder'), view.hint || '\u00a0'));
     clear(actionsEl);
     var primary = null;
     (view.actions || []).forEach(function (a) {
@@ -744,7 +803,14 @@
       // Slow venue Wi-Fi, a slow GPS fix or an Apps Script cold start: say it is still working.
       setTimeout(function () {
         if (renders !== id) return;
-        screenEl.appendChild(el('p', 'hint', view.slowHint || 'Still working. A slow connection can take a little while.'));
+        var text = view.slowHint || 'Still working. A slow connection can take a little while.';
+        var empty = screenEl.querySelector('.hint.placeholder');
+        if (empty) {
+          empty.textContent = text;
+          empty.classList.remove('placeholder');
+        } else {
+          screenEl.appendChild(el('p', 'hint', text));
+        }
       }, TIMING.slowHint);
     }
   }

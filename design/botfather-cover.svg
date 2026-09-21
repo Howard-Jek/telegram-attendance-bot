@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <!-- Image for @BotFather /newapp (640x360). Render: qlmanage -t -s 1280 (WebKit), crop 1280x720, resize 640x360. -->
+  <rect width="640" height="360" fill="#e8f0f9"/>
+
+  <!-- The stamp, as on the confirmed screen: double ring, CHECKED IN, 10:32, rotated -4deg -->
+  <g transform="translate(176 180) rotate(-4) scale(0.96) translate(-180 -180)" fill="none" stroke="#1f6fb2">
+    <circle cx="180" cy="180" r="126" stroke-width="6.5"/>
+    <circle cx="180" cy="180" r="112" stroke-width="2.5"/>
+    <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif" fill="#1f6fb2" stroke="none" text-anchor="middle">
+      <text x="180" y="154" font-size="22" font-weight="800" letter-spacing="2.6">CHECKED IN</text>
+      <text x="180" y="221" font-size="75" font-weight="800" letter-spacing="-1.5" style="font-variant-numeric: tabular-nums">10:32</text>
+    </g>
+  </g>
+
+  <!-- Title + subtitle -->
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+    <text x="344" y="178" font-size="62" font-weight="800" fill="#16181d" letter-spacing="-1.5">Check in</text>
+    <text x="346" y="221" font-size="24" font-weight="700" fill="#1f6fb2">One tap at the venue.</text>
+  </g>
+</svg>

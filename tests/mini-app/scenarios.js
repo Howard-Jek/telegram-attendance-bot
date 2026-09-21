@@ -75,7 +75,7 @@
         startSession: [{ ok: false, code: 'SESSION_ACTIVE', message: 'A check-in is already open until 11:30, started by Ada Admin.', data: SESSION }],
       },
       steps: [{ click: 'Start check-in (60 min)' }],
-      expect: { state: 'ready', text: ['Ada Admin already started this check-in', 'not checked in yet'], buttons: ['Check in'], calls: ['status', 'startSession', 'status'] },
+      expect: { state: 'ready', text: ['Ada Admin already started this check-in', 'not checked in yet', 'Open until 11:30'], notText: ['· started by'], buttons: ['Check in'], calls: ['status', 'startSession', 'status'] },
     },
     'admin-start-warning': {
       confirm: true,
@@ -85,7 +85,7 @@
           data: Object.assign({ warning: 'The group announcement could not be sent. Share the check-in link yourself.', shareLink: 'https://t.me/test_bot/checkin' }, SESSION) }],
       },
       steps: [{ click: 'Start check-in (60 min)' }, { waitState: 'admin-started' }, { click: 'Share check-in link' }],
-      expect: { state: 'admin-started', text: ['announcement could not be sent'], buttons: ['Check in', 'Share check-in link'],
+      expect: { state: 'admin-started', text: ['announcement could not be sent'], buttons: ['Share check-in link', 'Check in'],
         openedLinks: ['https://t.me/share/url?url=https%3A%2F%2Ft.me%2Ftest_bot%2Fcheckin'] },
     },
 
@@ -103,7 +103,7 @@
     'low-accuracy-then-retry': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })],
         checkin: [{ ok: false, code: 'LOW_ACCURACY', message: 'Your location is not precise enough (±180 m). Move outdoors or near a window and try again.', data: { accuracyM: 180, maxAccuracyM: 100 } }, CHECKED_IN] },
-      steps: [{ waitState: 'failed', text: ['Not checked in', 'Your location isn’t precise enough', '±180 m'] }, { click: 'Try again' }],
+      steps: [{ waitState: 'failed', text: ['Not checked in', 'Your location isn’t precise enough', 'Accuracy ±180 m (needs ±100 m)'] }, { click: 'Try again' }],
       expect: { state: 'checked-in', calls: ['status', 'checkin', 'checkin'], focusInApp: true } },
     'approximate-location': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })],
