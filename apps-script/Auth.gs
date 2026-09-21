@@ -113,6 +113,14 @@ function botToken_() {
   return token;
 }
 
-function isAdmin_(user, cfg) {
-  return cfg.adminIds.indexOf(user.id) !== -1;
+/**
+ * Whether the user may start and move check-ins: an admin of the Telegram group (creator or
+ * administrator), or listed in ADMIN_IDS. Returns true, false, or 'BUSY' if Telegram
+ * rate-limited the lookup.
+ */
+function checkAdmin_(ctx) {
+  if (ctx.cfg.adminIds.indexOf(ctx.user.id) !== -1) return true;
+  if (!CONFIG_CHECKS_.GROUP_CHAT_ID(ctx.cfg)) return false;
+  const role = cachedGroupRole_(ctx.token, ctx.cfg, ctx.user.id);
+  return role === 'BUSY' ? 'BUSY' : role === 'ADMIN';
 }

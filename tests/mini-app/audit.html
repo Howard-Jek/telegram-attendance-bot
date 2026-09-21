@@ -31,6 +31,19 @@
     for (var i = 0; i < (sc.steps || []).length; i++) {
       var step = sc.steps[i];
       if (step.waitState) await until(function () { return state() === step.waitState; }, 8000);
+      if (step.fill) {
+        var field = doc().querySelector(step.fill[0]);
+        if (field) { field.value = step.fill[1]; field.dispatchEvent(new frame.contentWindow.Event('input', { bubbles: true })); }
+      }
+      if (step.tap) {
+        var find = function () {
+          var all = Array.prototype.slice.call(doc().querySelectorAll('#app button'));
+          return all.find(function (b) { return b.textContent === step.tap; }) || all.find(function (b) { return b.textContent.indexOf(step.tap) !== -1; });
+        };
+        await until(function () { return find() && state() !== 'loading'; }, 8000);
+        if (find()) find().click();
+        await wait(50);
+      }
       var label = step.click || step.doubleClick;
       if (label) {
         await until(function () {
@@ -43,7 +56,11 @@
       }
     }
     var reached = await until(function () { return state() === sc.expect.state; }, 8000);
-    await wait(450); // let entrance animations finish
+    // Audit the resting layout: a hidden browser pane pauses CSS animations mid-way.
+    var still = doc().createElement('style');
+    still.textContent = '*, *::before, *::after { animation: none !important; transition: none !important; }';
+    doc().head.appendChild(still);
+    await wait(100);
     var report = reached ? frame.contentWindow.eval(src) : { errors: [{ type: 'state', message: 'never reached ' + sc.expect.state }], warnings: [] };
     frame.remove();
     return { name: name, theme: theme, width: width, errors: report.errors, warnings: report.warnings, coverage: report.coverage };

@@ -16,3 +16,8 @@
   - The "no" mirrors it. Every failed check-in shows a NOT CHECKED IN label in the stamp's type treatment, in the danger colour, over a tinted disc with an ✕.
   - Every state uses the same centred mark-title-line composition, so the eye always knows where the answer is.
 - **Accessibility.** AA contrast against whatever theme the user has. Telegram's own hint colour is below 4.5:1 on some themes, so muted text is corrected in JS until it passes. Status changes are announced through an `aria-live` region.
+- **September 2026 additions** (same system, no new visual language):
+  - *Admins start where they stand.* Start reads the admin's GPS and makes that spot the check-in point, so the confirm says so ("within 150 m of where you’re standing"). If the point is wrong, an admin who lands on "too far" gets **Move check-in point here** as the primary action, which also checks them in.
+  - *Group and full name, once.* After the stamp lands, a member with no saved group sees "Which group are you in?" as a set of large buttons under a compact stamp; the first time, a prefilled "Your full name" field sits above them. One tap on a group saves both. Afterwards the checked-in screen shows a tappable pill ("Bravo · Cy Tan · Change").
+  - A failure to save the group never reads as a failed check-in: it shows inline, and the stamp stays.
+

@@ -22,7 +22,7 @@
     // Simulate a large system font size (Android scales CSS font sizes).
     var scale = Number(params.get('fontScale') || sc.fontScale || 1);
     if (scale !== 1) {
-      var t = { small: 13, label: 15, body: 16, button: 19, title: 25, stamp: 49 };
+      var t = { small: 13, label: 15, body: 16, button: 19, title: 25, stamp: 49, 'stamp-compact': 30 };
       var css = Object.keys(t).map(function (k) { return '--t-' + k + ':' + Math.round(t[k] * scale) + 'px'; }).join(';');
       html = html.replace('</style>', ':root{' + css + '}</style>');
     }

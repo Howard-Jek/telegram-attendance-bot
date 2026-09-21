@@ -25,6 +25,16 @@
     return false;
   }
 
+  function findButton(doc, label) {
+    var all = Array.prototype.slice.call(doc.querySelectorAll('#app button'));
+    return all.find(function (b) { return b.textContent === label; }) ||
+      all.find(function (b) { return b.textContent.indexOf(label) !== -1; });
+  }
+
+  function choices(doc) {
+    return Array.prototype.map.call(doc.querySelectorAll('.choice'), function (b) { return b.textContent; });
+  }
+
   function buttons(doc) {
     return Array.prototype.map.call(doc.querySelectorAll('#actions button'), function (b) { return b.textContent; });
   }
@@ -47,6 +57,22 @@
         break;
       }
       (step.text || []).forEach(function (t) { if (text().indexOf(t) === -1) errors.push('step text missing: ' + t); });
+      if (step.fill) {
+        var field = doc().querySelector(step.fill[0]);
+        if (!field) { errors.push('no field ' + step.fill[0] + ' (at ' + state() + ')'); break; }
+        field.value = step.fill[1];
+        var W = win();
+        field.dispatchEvent(new W.Event('input', { bubbles: true }));
+      }
+      if (step.tap) {
+        // Any button in the app (group buttons and the profile pill live outside #actions).
+        var found = await until(function () { return findButton(doc(), step.tap) && state() !== 'loading'; }, 8000);
+        if (!found) { errors.push('no button ' + step.tap + ' (at ' + state() + ')'); break; }
+        var target = findButton(doc(), step.tap);
+        target.focus();
+        target.click();
+        await wait(30);
+      }
       var label = step.click || step.doubleClick;
       if (label) {
         var ok = await until(function () {
@@ -89,16 +115,41 @@
       if (e.openedLinks && JSON.stringify(log.openedLinks) !== JSON.stringify(e.openedLinks)) errors.push('links ' + JSON.stringify(log.openedLinks));
       if (e.stampFits) {
         var st = doc().querySelector('.stamp'), tm = doc().querySelector('.stamp-time'), lb = doc().querySelector('.stamp-label');
-        var fs = parseFloat(win().getComputedStyle(tm).fontSize);
-        if (tm.getBoundingClientRect().height > fs * 1.5) errors.push('stamp time wraps');
-        var inner = st.clientWidth - 16;
-        if (tm.scrollWidth > inner || lb.scrollWidth > inner) errors.push('stamp text wider than the ring');
+        var cs = function (n) { return win().getComputedStyle(n); };
+        // Layout size, not the on-screen box: the stamp's press-in animation scales it.
+        if (tm.offsetHeight > parseFloat(cs(tm).fontSize) * 1.5) errors.push('stamp time wraps');
+        // Every corner of the label and the time must sit inside the inner ring (inset 8px, 1px line).
+        var c = st.clientWidth / 2, r = c - 9;
+        [lb, tm].forEach(function (n) {
+          var half = parseFloat(cs(n).fontSize) * 0.375; // glyph height, not the line box
+          var mid = n.offsetTop + n.offsetHeight / 2;
+          [[n.offsetLeft, mid - half], [n.offsetLeft + n.offsetWidth, mid - half],
+            [n.offsetLeft, mid + half], [n.offsetLeft + n.offsetWidth, mid + half]].forEach(function (pt) {
+            if (Math.hypot(pt[0] - c, pt[1] - c) > r) errors.push((n === lb ? 'label' : 'time') + ' crosses the ring');
+          });
+        });
       }
       if (e.sentLocation) {
         var sent = log.calls.filter(function (c) { return c.action === 'checkin'; }).map(function (c) { return c.location; })[0];
         if (JSON.stringify(sent) !== JSON.stringify(e.sentLocation)) errors.push('sent location ' + JSON.stringify(sent));
       }
       if (e.confirmed && JSON.stringify(log.confirmed) !== JSON.stringify(e.confirmed)) errors.push('confirm ' + JSON.stringify(log.confirmed));
+      if (e.choices && JSON.stringify(choices(doc())) !== JSON.stringify(e.choices)) errors.push('choices ' + JSON.stringify(choices(doc())));
+      if (e.inputValue !== undefined) {
+        var inp = doc().getElementById('full-name');
+        var v = inp ? inp.value : null;
+        if (v !== e.inputValue) errors.push('name field ' + JSON.stringify(v));
+      }
+      if (e.sentProfile) {
+        var saves = log.calls.filter(function (c) { return c.action === 'saveProfile'; });
+        var last = saves[saves.length - 1];
+        var got = last ? { fullName: last.fullName, group: last.group } : null;
+        if (JSON.stringify(got) !== JSON.stringify(e.sentProfile)) errors.push('saved profile ' + JSON.stringify(got));
+      }
+      if (e.startLocation) {
+        var starts = log.calls.filter(function (c) { return c.action === 'startSession' || c.action === 'moveSite'; }).map(function (c) { return c.location; });
+        if (JSON.stringify(starts[0]) !== JSON.stringify(e.startLocation)) errors.push('point sent ' + JSON.stringify(starts[0]));
+      }
       if (e.openedSettings !== undefined && log.openedSettings !== e.openedSettings) errors.push('openSettings x' + log.openedSettings);
       if (e.closed !== undefined && log.closed !== e.closed) errors.push('close x' + log.closed);
       if (doc().querySelector('#screen img')) errors.push('user text rendered as HTML');

@@ -21,29 +21,30 @@
 <!-- Dev-only preview of web/index.html. Each frame is the real page with scripted Telegram/backend mocks. -->
 <script src="scenarios.js"></script>
 <script>
+  // [scenario, caption]. Each frame replays the scenario's own steps (clicks, taps, typing).
   var SHOW = [
-    ['member-auto-checkin', 'Checked in (auto, one tap)'],
-    ['admin-auto-checkin', 'Admin, checked in'],
+    ['profile-picker', 'After check-in: group + name (first time)'],
+    ['profile-first-time', 'Group saved'],
+    ['profile-change-open', 'Change group or name'],
+    ['profile-group-removed', 'Group no longer listed (name kept)'],
+    ['profile-no-groups', 'No groups defined: name only'],
+    ['profile-empty-name', 'Name left empty'],
+    ['profile-save-network-error', 'Couldn’t save (still checked in)'],
+    ['profile-many-long-groups', 'Admin, 12 groups, long names'],
     ['admin-idle', 'Admin, no session'],
-    ['admin-start-warning', 'Admin just started (with warning)', ['Start check-in (60 min)']],
+    ['admin-start-warning', 'Admin just started (with warning)'],
+    ['admin-out-of-range-buttons', 'Admin too far: move the point'],
+    ['admin-no-site', 'Admin: session without a point'],
+    ['admin-start-location-denied', 'Admin start: location off'],
+    ['member-auto-checkin', 'Checked in (returning, no groups)'],
     ['member-no-session', 'Member, no session'],
-    ['loading', 'Loading'],
-    ['out-of-range', 'Too far away'],
-    ['low-accuracy-then-retry', 'Location too rough', [], 'failed'],
-    ['not-member', 'Not a member'],
-    ['location-denied', 'Location denied (this bot)'],
-    ['ios-telegram-lacks-permission', 'Location off for Telegram (iOS)'],
-    ['android-location-off', 'Phone Location switched off'],
-    ['approximate-location', 'Approximate location only'],
-    ['gps-timeout', 'GPS timed out'],
-    ['sdk-failed-in-telegram', 'Telegram script failed to load'],
-    ['auth-expired', 'Page timed out'],
-    ['busy-twice', 'Server busy'],
-    ['desktop', 'Telegram Desktop / Web'],
+    ['out-of-range', 'Member too far away'],
+    ['member-no-site', 'Member: session without a point'],
     ['outside-telegram', 'Opened outside Telegram'],
-    ['hostile-names', 'Hostile name + long message'],
   ];
   var theme = new URLSearchParams(location.search).get('theme') || 'light';
+  var only = new URLSearchParams(location.search).get('only');
+  if (only) SHOW = SHOW.filter(function (s) { return only.split(',').indexOf(s[0]) !== -1; });
   var nav = document.getElementById('themes');
   Object.keys(THEMES).forEach(function (t) {
     var a = document.createElement('a');
@@ -52,6 +53,41 @@
     if (t === theme) a.setAttribute('aria-current', 'page');
     nav.appendChild(a);
   });
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  async function until(fn, ms) {
+    var end = Date.now() + ms;
+    while (Date.now() < end) { try { if (fn()) return true; } catch (e) {} await wait(80); }
+    return false;
+  }
+  async function replay(frame, sc) {
+    var doc = function () { return frame.contentDocument; };
+    var state = function () { return doc().body && doc().body.getAttribute('data-state'); };
+    var find = function (label, scope) {
+      var all = Array.prototype.slice.call(doc().querySelectorAll(scope));
+      return all.find(function (b) { return b.textContent === label; }) || all.find(function (b) { return b.textContent.indexOf(label) !== -1; });
+    };
+    for (var i = 0; i < (sc.steps || []).length; i++) {
+      var step = sc.steps[i];
+      if (step.waitState) await until(function () { return state() === step.waitState; }, 8000);
+      if (step.fill) {
+        var f = doc().querySelector(step.fill[0]);
+        if (f) { f.value = step.fill[1]; f.dispatchEvent(new frame.contentWindow.Event('input', { bubbles: true })); }
+      }
+      var label = step.click || step.tap;
+      if (label) {
+        var scope = step.click ? '#actions button' : '#app button';
+        await until(function () { return find(label, scope) && state() !== 'loading'; }, 8000);
+        var b = find(label, scope);
+        if (b) b.click();
+        await wait(60);
+      }
+    }
+    await until(function () { return state() === sc.expect.state; }, 8000);
+    var still = doc().createElement('style'); // a hidden pane pauses animations; show the resting state
+    still.textContent = '*, *::before, *::after { animation: none !important; transition: none !important; }';
+    doc().head.appendChild(still);
+    frame.setAttribute('data-ready', '1');
+  }
   var grid = document.getElementById('grid');
   SHOW.forEach(function (s) {
     var fig = document.createElement('figure');
@@ -63,15 +99,6 @@
     fig.appendChild(cap);
     fig.appendChild(frame);
     grid.appendChild(fig);
-    // Perform any clicks needed to reach the state (e.g. the admin Start button).
-    (s[2] || []).forEach(function (label) {
-      var tries = 0;
-      var timer = setInterval(function () {
-        tries++;
-        var doc = frame.contentDocument;
-        var btn = doc && Array.prototype.find.call(doc.querySelectorAll('#actions button'), function (b) { return b.textContent === label; });
-        if (btn || tries > 100) { clearInterval(timer); if (btn) btn.click(); }
-      }, 100);
-    });
+    frame.addEventListener('load', function () { replay(frame, SCENARIOS[s[0]]); }, { once: true });
   });
 </script>

@@ -153,8 +153,10 @@ class MockSheet {
     if (v === null || v === undefined) return '';
     if (typeof v === 'number' || typeof v === 'boolean' || isDate(v)) return v;
     if (typeof v !== 'string') return String(v);
-    if (v.startsWith("'")) return v.slice(1); // apostrophe forces text; it is not part of the value
+    // A plain-text cell takes the string as it is (pessimistically, an apostrophe stays part of
+    // the value); elsewhere a leading apostrophe forces text and is not part of the value.
     if (this.formats.get(`${r}:${c}`) === '@') return v;
+    if (v.startsWith("'")) return v.slice(1);
     if (v.startsWith('=') || v.startsWith('+') || (v.startsWith('-') && /[a-z(]/i.test(v))) {
       this.ss.env.formulaWrites.push({ sheet: this.name, r, c, v });
       return `#FORMULA(${v})`;
@@ -225,6 +227,8 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
     cache: new Map(), // CacheService.getScriptCache(): key -> {value, expires}
     props: { ...props },
     telegram, // method name -> (params) => JSON body, or throws
+    triggers: [],
+    serviceUrl: null,
   };
   const ss = new MockSpreadsheet(env);
   env.ss = ss;
@@ -259,6 +263,7 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
       // Documented: getActive*() is not available when a bound script runs as a web app.
       getActiveSpreadsheet: () => (env.inWebApp ? null : ss),
       openById: (id) => {
+        env.events.push({ type: 'open' });
         if (id !== ss.getId()) throw new Error(`Unexpected error while getting the method or property openById on object SpreadsheetApp.`);
         return ss;
       },
@@ -286,6 +291,7 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
           return k in env.props ? env.props[k] : null;
         },
         setProperty: (k, v) => { env.props[k] = String(v); },
+        deleteProperty: (k) => { delete env.props[k]; },
       }),
     },
     Utilities: {
@@ -302,6 +308,7 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
       formatDate,
       newBlob: (s) => ({ getBytes: () => signedBytes(Buffer.from(String(s), 'utf8')), getDataAsString: () => String(s) }),
       sleep: () => {},
+      getUuid: () => crypto.randomUUID(),
     },
     UrlFetchApp: {
       fetch(url, opts = {}) {
@@ -332,6 +339,37 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
         out.getContent = () => out.content;
         return out;
       },
+    },
+    // doPost output that Apps Script serves directly with HTTP 200 (ContentService output is
+    // served through a 302 redirect instead, which Telegram's webhook delivery treats as a failure).
+    HtmlService: {
+      createHtmlOutput(content = '') {
+        const out = { kind: 'html', content: String(content) };
+        out.getContent = () => out.content;
+        return out;
+      },
+    },
+    ScriptApp: {
+      getProjectTriggers: () => env.triggers.slice(),
+      deleteTrigger: (t) => { env.triggers = env.triggers.filter((x) => x !== t); },
+      newTrigger: (handler) => {
+        const spec = { handler };
+        const builder = {
+          timeBased: () => builder,
+          everyMinutes: (n) => {
+            if (![1, 5, 10, 15, 30].includes(n)) throw new Error(`Invalid minutes ${n}`);
+            spec.everyMinutes = n;
+            return builder;
+          },
+          create: () => {
+            const t = { ...spec, getHandlerFunction: () => handler };
+            env.triggers.push(t);
+            return t;
+          },
+        };
+        return builder;
+      },
+      getService: () => ({ getUrl: () => env.serviceUrl }),
     },
     Logger: { log: log('log') },
     console: { log: log('log'), info: log('info'), warn: log('warn'), error: log('error') },
@@ -371,6 +409,19 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
     }
     if (out.mimeType !== 'JSON') throw new Error(`doPost returned mime ${out.mimeType}`);
     return JSON.parse(out.getContent());
+  };
+  /** Deliver a Telegram update to doPost the way the webhook does (?hook=<secret>, JSON body). */
+  env.webhook = (update, hook = env.props.WEBHOOK_SECRET) => {
+    const wasInWebApp = env.inWebApp;
+    env.inWebApp = true;
+    let out;
+    try {
+      const contents = typeof update === 'string' ? update : JSON.stringify(update);
+      out = context.doPost({ postData: { contents, type: 'application/json' }, parameter: hook === undefined ? {} : { hook } });
+    } finally {
+      env.inWebApp = wasInWebApp;
+    }
+    return out;
   };
   env.sheet = (name) => ss.getSheetByName(name);
   return env;

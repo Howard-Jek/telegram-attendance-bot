@@ -14,6 +14,7 @@
     --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
     /* rem, so iOS Dynamic Type (html.ios below) scales the page; 1rem = 16px elsewhere. */
     --t-small: 0.8125rem; --t-label: 0.9375rem; --t-body: 1rem; --t-button: 1.1875rem; --t-title: 1.5625rem; --t-stamp: 3.0625rem;
+    --t-stamp-compact: 1.875rem;
     --r-control: 12px;
     --ease: cubic-bezier(0.2, 0, 0, 1);
 
@@ -44,7 +45,8 @@
     --accent-ink: var(--c-accent-ink, var(--accent));   /* 3:1 — stamp ring, large numerals, icons, focus */
     --accent-text: var(--c-accent-text, var(--accent)); /* 4.5:1 — small accent text */
     --button: var(--c-button, var(--accent));           /* 3:1 against its large bold label */
-    --link-ink: var(--c-link-ink, var(--link));
+    --link-ink: var(--c-link-ink, var(--link));         /* 3:1 on the surface — large link text */
+    --link-text: var(--c-link-text, var(--link));       /* 4.5:1 on the surface — small link text */
     --danger-ink: var(--c-danger-ink, var(--danger));
   }
 
@@ -171,7 +173,96 @@
     border-radius: 50%;
   }
   .stamp-label { font-size: var(--t-small); color: var(--accent-text); }
+  /* Smaller while the group picker shares the screen; still the same stamp. Everything inside is
+     sized in the stamp's own em, so the label keeps clear of the ring's curve at any text size. */
+  .stamp.is-compact { gap: 0; font-size: var(--t-stamp-compact); width: 4.5em; height: 4.5em; }
+  .stamp.is-compact .stamp-label { font-size: 0.4em; }
   .stamp-time { font-size: 1em; font-weight: 800; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
+
+  /* Group and name, asked once under the stamp. */
+  .picker { display: flex; flex-direction: column; gap: var(--s3); width: 100%; max-width: 26rem; margin-top: var(--s2); text-align: left; }
+  .field { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s2); }
+  .input {
+    appearance: none;
+    width: 100%;
+    min-height: 48px;
+    padding: var(--s3) var(--s4);
+    border: 1.5px solid var(--muted); /* the field's edge must be visible (3:1), not just its fill */
+    border-radius: var(--r-control);
+    background: var(--bg);
+    color: var(--text);
+    font: 400 var(--t-body)/1.3 var(--font); /* 16px+, so iOS doesn't zoom in on focus */
+  }
+  .input:focus { outline: 2px solid var(--accent-ink); outline-offset: 1px; border-color: var(--accent-ink); }
+  .input[aria-invalid="true"] { border-color: var(--danger-ink); }
+  .picker-q { margin: 0; font-size: var(--t-body); font-weight: 700; } /* one style for both questions */
+  .picker-q:focus { outline: none; }
+  .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--s3); }
+  .choice:last-child:nth-child(odd) { grid-column: 1 / -1; } /* no lone half-width button in the last row */
+  .choice {
+    appearance: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s2);
+    min-height: 52px;
+    padding: var(--s3) var(--s4);
+    border: 1.5px solid var(--muted); /* the same visible edge as the name field */
+    border-radius: var(--r-control);
+    background: var(--surface-ui);
+    color: var(--text);
+    font: 700 var(--t-body)/1.25 var(--font);
+    text-align: center;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    transition: transform 120ms var(--ease), filter 120ms var(--ease);
+  }
+  /* The saved group: tinted, with a tick. Focus keeps its own outline, so the two never look alike. */
+  .choice[aria-current="true"] {
+    border-color: var(--accent-ink);
+    box-shadow: inset 0 0 0 1px var(--accent-ink);
+    background: color-mix(in srgb, var(--accent-ink) 14%, var(--bg));
+  }
+  .choice svg { flex: none; width: 1.1em; height: 1.1em; fill: none; stroke: var(--accent-ink); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .spinner-sm {
+    display: inline-block;
+    vertical-align: -0.15em;
+    flex: none;
+    width: 1em;
+    height: 1em;
+    border: 2px solid color-mix(in srgb, var(--muted) 35%, transparent);
+    border-top-color: var(--accent-ink);
+    border-radius: 50%;
+  }
+  .choice:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+  .choice:active { transform: scale(0.98); filter: brightness(0.92); }
+  .choice:disabled { cursor: default; opacity: 0.55; }
+  .choice.is-saving { opacity: 1; }
+  @media (hover: hover) { .choice:not(:disabled):hover { filter: brightness(0.94); } }
+  .field-error { margin: 0; font-size: var(--t-label); font-weight: 600; color: var(--danger-ink); }
+  /* The saved group and name, tappable to change. */
+  .tag {
+    appearance: none;
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: baseline;
+    column-gap: var(--s2);
+    max-width: 100%;
+    min-height: 44px;
+    padding: var(--s2) var(--s4);
+    border: 0;
+    border-radius: var(--s4); /* the same radius as .meta */
+    background: var(--surface-ui);
+    color: var(--text);
+    font: 600 var(--t-label)/1.7 var(--font);
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .tag-action { color: var(--link-text); font-weight: 700; white-space: nowrap; }
+  .tag:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+  .tag:active { filter: brightness(0.92); }
+  .meta.is-plain { padding: 0; background: none; color: var(--muted); } /* beside a tappable pill, plain text */
 
   /* Sticky, so the one action stays reachable when large text makes the screen taller than the phone. */
   .actions {
@@ -191,6 +282,7 @@
     .mark svg { width: 32px; height: 32px; }
     .mark[data-tone="no"] { width: 96px; height: 96px; }
     .mark[data-tone="no"] svg { width: 40px; height: 40px; }
+    .stamp.is-compact { font-size: calc(var(--t-stamp-compact) * 0.85); }
   }
   .btn {
     appearance: none;
@@ -208,10 +300,12 @@
   .btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
   .btn:active { transform: scale(0.98); filter: brightness(0.92); }
   .btn:disabled { cursor: default; opacity: 0.55; }
+  .btn.is-saving { opacity: 1; }
+  .btn .spinner-sm { margin-left: var(--s2); }
   @media (hover: hover) { .btn:not(:disabled):hover { filter: brightness(0.9); } }
 
   @media (prefers-reduced-motion: no-preference) {
-    .spinner { animation: spin 0.9s linear infinite; }
+    .spinner, .spinner-sm { animation: spin 0.9s linear infinite; }
     .stamp.is-new { animation: stamp-in 320ms var(--ease) both; }
     .screen { animation: fade-in 200ms var(--ease) both; }
     .mark.shake { animation: shake 280ms var(--ease); }
@@ -269,6 +363,16 @@
   var renders = 0;
   var denials = 0;         // location refusals in a row
   var settingsOpened = false;
+  var flow = 'checkin';    // what a location screen's Try again repeats: 'checkin', 'start' or 'move'
+  var lastCheckin = null;  // {atText, closesAtText} of this person's check-in
+  var me = null;           // {groups, profile} from the server once checked in (null: not offered)
+  var picking = false;     // the group/name picker is open by choice ("Change")
+  var savingProfile = false;
+  var pickerError = '';
+  var nameInvalid = false;
+  var draftName = null;    // what they typed, kept across re-renders
+  var justMoved = false;   // an admin just moved the check-in point (said once on the next screen)
+  var lastDistanceM = 0;   // the admin's distance from the point, for the Move confirmation
 
   // ---------- views ----------
 
@@ -278,16 +382,26 @@
     return 'Open until ' + s.closesAtText + (status.isAdmin && s.startedByName ? ' · started by ' + s.startedByName : '');
   }
 
+  function radiusText() {
+    return metres((status && status.radiusM) || 150);
+  }
+
   function metres(m) {
-    return m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
+    return m >= 1000 ? (m / 1000).toFixed(1).replace(/\.0$/, '') + ' km' : Math.round(m) + ' m';
   }
 
   var NOT_CHECKED_IN = 'Not checked in';
+  // What a failure means, per flow: a check-in, starting a check-in, or moving its point.
+  var OUTCOMES = { checkin: NOT_CHECKED_IN, start: 'Not started', move: 'Not moved' };
+  var WHY_LOCATION = {
+    start: 'Starting a check-in uses your location as the check-in point. ',
+    move: 'Moving the check-in point uses your location. ',
+  };
 
   var views = {
     outside: function () {
       return { state: 'outside', icon: 'send', title: 'Open this from Telegram',
-        line: 'Tap the 📍 Check in button in your group chat.' };
+        line: 'Type /checkin in your group chat, then tap 📍 Check in.' };
     },
     sdkFailed: function () {
       return { state: 'sdk-failed', icon: 'alert', tone: 'bad', title: 'Couldn’t load check-in',
@@ -308,7 +422,7 @@
     },
     noSession: function () {
       return { state: 'no-session', icon: 'clock', title: 'No check-in open right now',
-        line: 'When an admin opens one, tap the 📍 Check in button in the group.' };
+        line: 'When an admin opens one, type /checkin in the group and tap 📍 Check in.' };
     },
     closed: function () {
       return { state: 'closed', icon: 'x', tone: 'no', outcome: NOT_CHECKED_IN, title: 'Check-in closed before you got in',
@@ -318,7 +432,7 @@
     adminIdle: function () {
       var mins = (status && status.sessionMinutes) || 60;
       return { state: 'admin-idle', icon: 'flag', title: 'No check-in open',
-        line: 'Start one and the group can check in for the next ' + mins + ' minutes.',
+        line: 'Start one where you’re standing. Members within ' + radiusText() + ' of you can check in for the next ' + mins + ' minutes.',
         hint: 'Once started, a check-in can’t be ended early.',
         actions: [{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }] };
     },
@@ -332,7 +446,7 @@
         actions = [{ label: 'Share check-in link', primary: true, onClick: function () { share(data.shareLink); } }, checkInAction];
       }
       return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
-        line: 'You’re not checked in yet. Tap Check in when you’re at the venue.',
+        line: 'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
         meta: 'Open until ' + data.closesAtText, notice: data.warning, actions: actions };
     },
     ready: function (line) {
@@ -342,21 +456,58 @@
         meta: line && s ? 'Open until ' + s.closesAtText : sessionMeta(), // the line already names the starter
         actions: [{ label: 'Check in', primary: true, onClick: checkIn }] };
     },
+    // After the stamp: the group picker (first time, or on Change), else the saved group as a pill.
     checkedIn: function (atText, closesAtText, isNew) {
       var s = status && status.activeSession;
-      return { state: 'checked-in', stamp: atText, stampIsNew: isNew, title: 'You’re on the list',
-        line: 'Check-in closes at ' + closesAtText + '.',
-        meta: status && status.isAdmin && s && s.startedByName ? 'Started by ' + s.startedByName : '',
-        actions: [{ label: 'Done', onClick: closeApp }] };
+      var asking = picking || profileNeeded();
+      var view = { state: asking ? 'profile' : 'checked-in', stamp: atText, stampIsNew: isNew, stampCompact: asking,
+        title: 'You’re on the list', line: 'Check-in closes at ' + closesAtText + '.',
+        meta: status && status.isAdmin && s && s.startedByName ? 'Started by ' + s.startedByName : '' };
+      if (justMoved) {
+        view.hint = 'The check-in point is now where you’re standing.';
+        justMoved = false;
+      }
+      if (!asking) {
+        if (me && me.profile) {
+          view.tag = profileTag();
+          view.metaPlain = true; // so only the tappable pill looks like one
+        }
+        view.actions = [{ label: 'Done', onClick: closeApp }];
+        return view;
+      }
+      var p = me.profile;
+      var hasGroups = me.groups.length > 0;
+      // Say up front that the check-in is done: the question is extra, not a condition.
+      if (!picking) {
+        view.line = !p || !p.fullName
+          ? 'You’re checked in. One quick question so admins can tell who’s who.'
+          : 'You’re checked in. The group list has changed, so please pick yours again.';
+      }
+      view.say = hasGroups ? 'Which group are you in?' : 'Please confirm your full name.';
+      view.body = pickerEl();
+      view.actions = [];
+      if (!hasGroups) {
+        view.actions.push({ label: 'Save name', primary: true, onClick: function (e) { saveProfile('', e.currentTarget); } });
+      } else if (picking && p && p.group) {
+        // Changing only the name: keep the current group.
+        view.actions.push({ label: 'Save', primary: true, onClick: function (e) { saveProfile(p.group, e.currentTarget); } });
+      }
+      if (!profileNeeded()) view.actions.push({ label: 'Cancel', onClick: closePicker });
+      return view;
     },
-    failed: function (res, retry, duringCheckIn) {
+    // kind: 'checkin', 'start' or 'move' when that action failed; '' for loading the page.
+    failed: function (res, retry, kind) {
       var titles = {
         OUT_OF_RANGE: 'You’re too far from the venue',
         LOW_ACCURACY: 'Your location isn’t precise enough',
         NOT_MEMBER: 'Members only',
         BUSY: 'Busy right now',
         NETWORK: 'Couldn’t reach the server',
+        NO_SITE: 'Check-in isn’t ready yet',
       };
+      var admin = status && status.isAdmin;
+      var title = titles[res.code] || 'Something went wrong';
+      var actions = [{ label: 'Try again', primary: true, onClick: retry }];
       // Lines are built from the numbers, so they add to the title instead of repeating it.
       var line = res.message;
       var d = res.data || {};
@@ -365,30 +516,46 @@
           '). Turn on Precise Location for Telegram in your phone’s settings, then try again.';
       } else if (res.code === 'LOW_ACCURACY' && d.accuracyM && d.maxAccuracyM) {
         line = 'Accuracy ±' + metres(d.accuracyM) + ' (needs ±' + metres(d.maxAccuracyM) + '). Move outdoors or near a window, then try again.';
-      } else if (res.code === 'OUT_OF_RANGE' && d.distanceM && d.radiusM) {
-        line = 'You’re ' + metres(d.distanceM) + ' from the venue. Check-in works within ' + metres(d.radiusM) + '.';
+      } else if (res.code === 'OUT_OF_RANGE' && admin && d.distanceM) {
+        // An admin may just not have arrived yet, so Try again stays first; but if the check-in was
+        // started in the wrong place, they can move it from here.
+        lastDistanceM = d.distanceM;
+        title = 'You’re too far from the check-in point';
+        line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, you can move it to where you are.';
+        actions.push({ label: 'Move check-in point here', onClick: moveHere });
+      } else if (res.code === 'OUT_OF_RANGE' && d.radiusM) {
+        // Members get a rounded distance, or none (the server keeps the point's location private).
+        var far = d.beyondM ? 'more than ' + metres(d.beyondM) : d.distanceM ? (d.rounded ? 'about ' : '') + metres(d.distanceM) : '';
+        line = far
+          ? 'You’re ' + far + ' from the venue. Check-in works within ' + metres(d.radiusM) + '.'
+          : 'You’re not within ' + metres(d.radiusM) + ' of the venue.';
+      } else if (res.code === 'NO_SITE' && admin) {
+        lastDistanceM = 0;
+        line = 'This check-in doesn’t have a check-in point yet. Set it to where you’re standing.';
+        actions = [{ label: 'Set check-in point here', primary: true, onClick: moveHere }];
+      } else if (res.code === 'NO_SITE') {
+        line = 'The check-in point isn’t set yet. Ask an admin to set it, then try again.';
       } else if (res.code === 'NOT_MEMBER') {
         line = 'Only members of this group can check in. Just joined? Try again in a minute.';
       } else if (res.code === 'BUSY') {
         line = 'Lots of people are checking in. Try again in a few seconds.';
       }
-      var outcome = '';
-      var unknown = duringCheckIn && res.code === 'NETWORK';
+      var outcome = OUTCOMES[kind] || '';
+      var unknown = !!outcome && res.code === 'NETWORK';
       if (unknown) {
-        // After a network failure the server may still have recorded it, so this is not a "no".
+        // After a network failure the server may still have done it, so this is not a "no".
         outcome = 'Not confirmed';
-        line = 'We couldn’t confirm your check-in. Try again — you won’t be counted twice.';
-      } else if (duringCheckIn) {
-        outcome = NOT_CHECKED_IN;
+        line = kind === 'checkin' ? 'We couldn’t confirm your check-in. Try again — you won’t be counted twice.'
+          : kind === 'start' ? 'We couldn’t confirm the check-in started. Try again — it won’t start twice.'
+            : 'We couldn’t confirm the move. Try again.';
       }
-      var no = duringCheckIn && !unknown;
+      var no = kind === 'checkin' && !unknown; // the ✕ ring mirrors the stamp: check-ins only
       return { state: 'failed', icon: no ? 'x' : 'alert', tone: no ? 'no' : 'bad', outcome: outcome, outcomeUnknown: unknown,
-        title: titles[res.code] || 'Something went wrong', line: line, meta: sessionMeta(),
-        actions: [{ label: 'Try again', primary: true, onClick: retry }] };
+        title: title, line: line, meta: sessionMeta(), actions: actions };
     },
-    auth: function (res, duringCheckIn) {
-      return { state: 'auth', icon: duringCheckIn ? 'x' : 'lock', tone: duringCheckIn ? 'no' : 'bad',
-        outcome: duringCheckIn ? NOT_CHECKED_IN : '',
+    auth: function (res, kind) {
+      var no = kind === 'checkin';
+      return { state: 'auth', icon: no ? 'x' : 'lock', tone: no ? 'no' : 'bad', outcome: OUTCOMES[kind] || '',
         title: res.code === 'AUTH_EXPIRED' ? 'This page timed out' : 'Couldn’t verify you',
         line: res.message, actions: [{ label: 'Close', primary: true, onClick: closeApp }] };
     },
@@ -398,22 +565,24 @@
       var bot = where === 'bot';
       var still = denials > 1 ? 'still ' : '';
       var settings = { label: 'Open settings', primary: !settingsOpened, onClick: openLocationSettings };
-      var retry = { label: 'Try again', primary: !bot || settingsOpened, onClick: checkIn };
-      return { state: 'location-denied', icon: 'x', tone: 'no', outcome: NOT_CHECKED_IN, shake: denials > 1,
+      var retry = { label: 'Try again', primary: !bot || settingsOpened, onClick: retryFlow };
+      var no = flow === 'checkin'; // the ✕ ring mirrors the stamp: check-ins only
+      return { state: 'location-denied', icon: no ? 'x' : 'alert', tone: no ? 'no' : 'bad', outcome: OUTCOMES[flow], shake: denials > 1,
         title: bot ? 'Location access is ' + still + 'off' : 'Location is ' + still + 'off for Telegram',
-        line: bot
+        line: (WHY_LOCATION[flow] || '') + (bot
           ? 'Allow location for this check-in in Telegram’s settings, then come back and tap Try again.'
-          : 'Allow location for Telegram in your phone’s settings, then try again.',
+          : 'Allow location for Telegram in your phone’s settings, then try again.'),
         meta: sessionMeta(),
         actions: bot ? (settingsOpened ? [retry, settings] : [settings, retry]) : [retry] };
     },
     locationError: function (kind) {
-      return { state: 'location-error', icon: 'x', tone: 'no', outcome: NOT_CHECKED_IN,
+      var no = flow === 'checkin';
+      return { state: 'location-error', icon: no ? 'x' : 'alert', tone: no ? 'no' : 'bad', outcome: OUTCOMES[flow],
         title: 'Couldn’t get your location',
-        line: kind === 'timeout'
+        line: (WHY_LOCATION[flow] || '') + (kind === 'timeout'
           ? 'Your phone didn’t return a location in time. Check that Location is on and Telegram may use it, then try again.'
-          : 'Turn on Location on your phone, then try again.',
-        meta: sessionMeta(), actions: [{ label: 'Try again', primary: true, onClick: checkIn }] };
+          : 'Turn on Location on your phone, then try again.'),
+        meta: sessionMeta(), actions: [{ label: 'Try again', primary: true, onClick: retryFlow }] };
     },
   };
 
@@ -441,10 +610,10 @@
       // primary button after Open settings; if the client does report activation, retry once.
       tg.onEvent('locationManagerUpdated', function () {
         var lm = tg.LocationManager;
-        if (current === 'location-denied' && lm && lm.isAccessGranted) checkIn();
+        if (current === 'location-denied' && lm && lm.isAccessGranted) retryFlow();
       });
       tg.onEvent('activated', function () {
-        if (current === 'location-denied' && settingsOpened) checkIn();
+        if (current === 'location-denied' && settingsOpened) retryFlow();
       });
     }
     if (PHONE_PLATFORMS.indexOf(tg.platform) === -1) return render(views.desktop());
@@ -468,11 +637,14 @@
   function loadStatus(autoCheckIn, readyLine) {
     render(views.loading('Checking…'));
     return api('status').then(function (res) {
-      if (!res.ok) return fail(res, function () { loadStatus(autoCheckIn, readyLine); }, false);
+      if (!res.ok) return fail(res, function () { loadStatus(autoCheckIn, readyLine); }, '');
       status = res.data;
       var s = status.activeSession;
       if (!s) return render(status.isAdmin ? views.adminIdle() : views.noSession());
-      if (status.myCheckin) return render(views.checkedIn(status.myCheckin.atText, s.closesAtText, false));
+      if (status.myCheckin) {
+        rememberCheckin({ atText: status.myCheckin.atText, closesAtText: s.closesAtText, groups: status.groups, profile: status.profile });
+        return render(views.checkedIn(status.myCheckin.atText, s.closesAtText, false));
+      }
       // The group tap should be the only tap: try straight away.
       if (autoCheckIn) return checkIn();
       render(views.ready(readyLine));
@@ -483,17 +655,26 @@
     if (working || confirming) return; // a double tap must not stack a second confirmation
     confirming = true;
     var mins = (status && status.sessionMinutes) || 60;
-    confirmDialog('Start a ' + mins + '-minute check-in for the group? It can’t be ended early.').then(function (ok) {
+    confirmDialog('Start a ' + mins + '-minute check-in here? Members will need to be within ' + radiusText() +
+      ' of where you’re standing. It can’t be ended early.').then(function (ok) {
       confirming = false;
       if (!ok || working) return;
-      working = true;
+      startHere();
+    });
+  }
+
+  // The admin's own position becomes the check-in point.
+  function startHere() {
+    if (working) return;
+    working = true;
+    locate('start', function (fix) {
       render(views.loading('Starting check-in…'));
-      api('startSession').then(function (res) {
+      api('startSession', { location: sendable(fix) }).then(function (res) {
         working = false;
         if (res.code === 'SESSION_STARTED') {
           haptic('success');
           status.activeSession = res.data;
-          // data.warning (Phase 3) explains e.g. that the group announcement could not be sent.
+          // data.warning explains e.g. that the group announcement could not be sent.
           return render(views.adminStarted(res.data));
         }
         if (res.code === 'SESSION_ACTIVE') {
@@ -501,19 +682,59 @@
           var by = (res.data && res.data.startedByName) || 'Another admin';
           return loadStatus(false, by + ' already started this check-in. You’re not checked in yet.');
         }
-        fail(res, startSession, false);
+        fail(res, startHere, 'start');
       });
     });
   }
 
-  function checkIn() {
+  function moveHere() {
+    if (working || confirming) return;
+    confirming = true;
+    confirmDialog(lastDistanceM
+      ? 'Move the check-in point ' + metres(lastDistanceM) + ', to where you’re standing? Members near the old spot won’t be able to check in.'
+      : 'Set the check-in point to where you’re standing? Members within ' + radiusText() + ' of you can then check in.').then(function (ok) {
+      confirming = false;
+      if (!ok || working) return;
+      moveNow();
+    });
+  }
+
+  function moveNow() {
     if (working) return;
     working = true;
+    locate('move', function (fix) {
+      render(views.loading('Moving the check-in point…'));
+      api('moveSite', { location: sendable(fix) }).then(function (res) {
+        if (res.code === 'SITE_MOVED') {
+          haptic('success');
+          justMoved = true;
+          // The admin is standing on the new point, so the same fix checks them in.
+          if (!status.myCheckin) return submit(fix, true);
+          working = false;
+          return showCheckedIn(false);
+        }
+        working = false;
+        if (res.code === 'NO_ACTIVE_SESSION') return loadStatus(false);
+        fail(res, moveNow, 'move');
+      });
+    });
+  }
+
+  function retryFlow() {
+    if (flow === 'start') return startHere();
+    if (flow === 'move') return moveNow();
+    checkIn();
+  }
+
+  // Gets a location for `purpose`, then calls onFix. Location problems are shown here, and their
+  // Try again repeats the same purpose.
+  function locate(purpose, onFix) {
+    flow = purpose;
     render(views.loading('Getting your location…', 'If Telegram asks, allow location access.',
       'Still looking for your location. Check that Location is on.'));
-    getLocation().then(function (fix) {
+    (purpose === 'checkin' ? getLocation() : freshLocation()).then(function (fix) {
       denials = 0;
-      return submit(fix, false);
+      onFix(fix);
     }, function (err) {
       working = false;
       haptic('error');
@@ -525,14 +746,25 @@
     });
   }
 
+  function sendable(fix) {
+    return { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy };
+  }
+
+  function checkIn() {
+    if (working) return;
+    working = true;
+    locate('checkin', function (fix) { submit(fix, false); });
+  }
+
   function submit(fix, isFreshRetry) {
     render(views.loading('Checking you in…'));
-    return api('checkin', { location: { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy } }).then(function (res) {
+    return api('checkin', { location: sendable(fix) }).then(function (res) {
       if (res.code === 'CHECKED_IN' || res.code === 'ALREADY_CHECKED_IN') {
         working = false;
         haptic('success');
         status.myCheckin = { at: res.data.at, atText: res.data.atText };
-        return render(views.checkedIn(res.data.atText, res.data.closesAtText, true));
+        rememberCheckin(res.data);
+        return showCheckedIn(true);
       }
       // Telegram for Android answers with the phone's cached last-known fix, which can be stale. If it
       // lands too far away or too rough, get one fresh fix before saying no. (Only here, because the
@@ -542,7 +774,7 @@
         render(views.loading('Getting a fresh location…', 'If Telegram asks, allow location access.'));
         return browserLocation().then(function (fresh) { return submit(fresh, true); }, function () {
           working = false;
-          fail(res, checkIn, true);
+          fail(res, checkIn, 'checkin');
         });
       }
       working = false;
@@ -550,15 +782,190 @@
         haptic('error');
         return render(views.closed());
       }
-      fail(res, checkIn, true);
+      fail(res, checkIn, 'checkin');
     });
   }
 
-  function fail(res, retry, duringCheckIn) {
+  function fail(res, retry, kind) {
     haptic('error');
-    if (res.code === 'AUTH_FAILED' || res.code === 'AUTH_EXPIRED') return render(views.auth(res, duringCheckIn));
+    if (res.code === 'AUTH_FAILED' || res.code === 'AUTH_EXPIRED') return render(views.auth(res, kind));
     if (res.code === 'UNSUPPORTED_PLATFORM') return render(views.desktop());
-    render(views.failed(res, retry, duringCheckIn));
+    render(views.failed(res, retry, kind));
+  }
+
+  // ---------- group and full name ----------
+
+  function rememberCheckin(data) {
+    lastCheckin = { atText: data.atText, closesAtText: data.closesAtText };
+    // A server without groups support sends no list; then nothing is asked.
+    if (Array.isArray(data.groups)) me = { groups: data.groups, profile: data.profile || null };
+  }
+
+  function showCheckedIn(isNew) {
+    render(views.checkedIn(lastCheckin.atText, lastCheckin.closesAtText, isNew));
+  }
+
+  function profileNeeded() {
+    if (!me) return false;
+    var p = me.profile;
+    return !p || !p.fullName || (me.groups.length > 0 && !p.group);
+  }
+
+  function telegramName() {
+    var u = tg.initDataUnsafe && tg.initDataUnsafe.user;
+    return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : '';
+  }
+
+  function closePicker() {
+    picking = false;
+    pickerError = '';
+    nameInvalid = false;
+    draftName = null;
+    showCheckedIn(false);
+    focusFirst('.tag');
+  }
+
+  function focusFirst(selector) {
+    var node = document.querySelector(selector);
+    if (node) node.focus();
+  }
+
+  function profileTag() {
+    var p = me.profile;
+    var now = [p.group, p.fullName].filter(Boolean);
+    var b = el('button', 'tag');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'Change group or name (now ' + now.join(', ') + ')');
+    b.appendChild(el('span', '', now.join(' · ')));
+    b.appendChild(el('span', 'tag-action', 'Change'));
+    b.addEventListener('click', function () {
+      picking = true;
+      showCheckedIn(false);
+      // Most changes are a group: land on the question, not the name field, so no keyboard pops up.
+      focusFirst(me.groups.length ? '#group-q' : '#full-name');
+    });
+    return b;
+  }
+
+  function pickerEl() {
+    var p = me.profile;
+    var box = el('div', 'picker');
+    var firstTime = !p || !p.fullName;
+    if (firstTime || picking) {
+      var field = el('div', 'field');
+      var label = el('label', 'picker-q', 'Your full name');
+      label.htmlFor = 'full-name';
+      var input = el('input', 'input');
+      input.id = 'full-name';
+      input.type = 'text';
+      input.autocomplete = 'name';
+      input.autocapitalize = 'words';
+      input.spellcheck = false;
+      input.maxLength = 60;
+      input.setAttribute('enterkeyhint', 'done');
+      input.value = draftName !== null ? draftName : (p && p.fullName) || telegramName();
+      if (nameInvalid) {
+        input.setAttribute('aria-invalid', 'true');
+        input.setAttribute('aria-describedby', 'name-error');
+      }
+      input.addEventListener('input', function () { draftName = input.value; });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      });
+      field.appendChild(label);
+      field.appendChild(input);
+      if (nameInvalid) {
+        var err = el('p', 'field-error', 'Enter your full name first.');
+        err.id = 'name-error';
+        field.appendChild(err);
+      }
+      box.appendChild(field);
+    }
+    if (me.groups.length) {
+      var q = el('p', 'picker-q', 'Which group are you in?');
+      q.id = 'group-q';
+      q.tabIndex = -1;
+      box.appendChild(q);
+      var grid = el('div', 'choices');
+      grid.setAttribute('role', 'group');
+      grid.setAttribute('aria-labelledby', 'group-q');
+      me.groups.forEach(function (g) {
+        var b = el('button', 'choice');
+        b.type = 'button';
+        if (p && p.group === g) {
+          b.setAttribute('aria-current', 'true');
+          b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+        }
+        b.appendChild(el('span', '', g));
+        b.addEventListener('click', function () { saveProfile(g, b); });
+        grid.appendChild(b);
+      });
+      box.appendChild(grid);
+    }
+    if (pickerError) {
+      var notice = noticeEl(pickerError);
+      notice.id = 'picker-error';
+      notice.tabIndex = -1;
+      box.appendChild(notice);
+    }
+    return box;
+  }
+
+  function saveProfile(group, button) {
+    if (savingProfile) return;
+    var input = document.getElementById('full-name');
+    var name = (input ? input.value : (me.profile && me.profile.fullName) || '').replace(/\s+/g, ' ').trim();
+    if (!name) {
+      nameInvalid = true;
+      pickerError = '';
+      showCheckedIn(false);
+      statusEl.textContent = 'Enter your full name first.';
+      focusFirst('#full-name');
+      return;
+    }
+    savingProfile = true;
+    draftName = input ? input.value : null;
+    Array.prototype.forEach.call(document.querySelectorAll('.choice, #actions button, #full-name'), function (c) { c.disabled = true; });
+    if (button) {
+      // Keep the chosen group readable; the spinner says it's on its way.
+      button.classList.add('is-saving');
+      button.setAttribute('aria-busy', 'true');
+      var spin = el('span', 'spinner-sm');
+      spin.setAttribute('aria-hidden', 'true');
+      button.appendChild(spin);
+    }
+    statusEl.textContent = 'Saving…';
+    var id = renders;
+    setTimeout(function () {
+      if (savingProfile && renders === id) statusEl.textContent = 'Still saving. A slow connection can take a little while.';
+    }, TIMING.slowHint);
+    api('saveProfile', { fullName: name, group: group }).then(function (res) {
+      savingProfile = false;
+      if (res.code === 'PROFILE_SAVED') {
+        haptic('success');
+        me = { groups: res.data.groups, profile: res.data.profile };
+        picking = false;
+        pickerError = '';
+        nameInvalid = false;
+        draftName = null;
+        showCheckedIn(false);
+        var p = me.profile;
+        statusEl.textContent = 'Saved: ' + [p.group, p.fullName].filter(Boolean).join(', ') + '.';
+        focusFirst('.tag');
+        return;
+      }
+      haptic('error');
+      if (res.code === 'INVALID_GROUP' && res.data && Array.isArray(res.data.groups)) me.groups = res.data.groups;
+      nameInvalid = res.code === 'INVALID_NAME';
+      // Whatever went wrong, the check-in itself stands; say so.
+      pickerError = res.code === 'NETWORK' || res.code === 'BUSY'
+        ? 'Couldn’t save that. You’re still checked in; tap your group again.'
+        : res.message;
+      picking = picking || !profileNeeded();
+      showCheckedIn(false);
+      statusEl.textContent = pickerError;
+      focusFirst(nameInvalid ? '#full-name' : '#picker-error');
+    });
   }
 
   // ---------- backend ----------
@@ -597,6 +1004,16 @@
     var lm = tg.LocationManager;
     if (!lm || !tg.isVersionAtLeast || !tg.isVersionAtLeast('8.0')) return browserLocation();
     return telegramLocation(lm);
+  }
+
+  // For the check-in point itself. Telegram for Android can answer with a cached fix of any age,
+  // which would put the point wherever the admin last was; there, a fresh browser fix is taken
+  // too (one more permission prompt, once per start), falling back to Telegram's if it fails.
+  function freshLocation() {
+    return getLocation().then(function (fix) {
+      if (tg.platform !== 'android' || fix.source !== 'telegram') return fix;
+      return browserLocation().then(function (fresh) { return fresh; }, function () { return fix; });
+    });
   }
 
   function telegramLocation(lm) {
@@ -668,7 +1085,7 @@
     settingsOpened = true;
     try {
       // The SDK only opens settings when access was asked for and refused; otherwise just retry.
-      if (!lm || !lm.isAccessRequested || lm.isAccessGranted) return checkIn();
+      if (!lm || !lm.isAccessRequested || lm.isAccessGranted) return retryFlow();
       lm.openSettings();
     } catch (e) {
       return render(views.locationDenied('app'));
@@ -680,6 +1097,7 @@
 
   function confirmDialog(message) {
     return new Promise(function (resolve) {
+      if (message.length > 256) message = message.slice(0, 255) + '…'; // Telegram refuses longer popups
       if (!tg.isVersionAtLeast || !tg.isVersionAtLeast('6.2')) return resolve(window.confirm(message));
       try {
         tg.showConfirm(message, function (ok) { resolve(!!ok); });
@@ -739,8 +1157,8 @@
     return mark;
   }
 
-  function stampEl(atText, isNew) {
-    var stamp = el('div', 'stamp' + (isNew ? ' is-new' : ''));
+  function stampEl(atText, isNew, compact) {
+    var stamp = el('div', 'stamp' + (isNew ? ' is-new' : '') + (compact ? ' is-compact' : ''));
     stamp.setAttribute('aria-hidden', 'true'); // announced through the title
     stamp.appendChild(el('span', 'stamp-label', 'Checked in'));
     stamp.appendChild(el('span', 'stamp-time', atText));
@@ -770,7 +1188,7 @@
     current = view.state;
     document.body.setAttribute('data-state', view.state);
     clear(screenEl);
-    screenEl.appendChild(view.stamp ? stampEl(view.stamp, view.stampIsNew) : markEl(view));
+    screenEl.appendChild(view.stamp ? stampEl(view.stamp, view.stampIsNew, view.stampCompact) : markEl(view));
     if (view.outcome) {
       var outcome = el('p', 'outcome' + (view.outcomeUnknown ? ' is-unknown' : ''), view.outcome);
       outcome.setAttribute('aria-hidden', 'true'); // announced through the title
@@ -784,7 +1202,11 @@
     title.tabIndex = -1;
     screenEl.appendChild(title);
     if (view.line) screenEl.appendChild(el('p', 'line', view.line));
-    if (view.meta || view.reserve) screenEl.appendChild(el('p', 'meta' + (view.meta ? '' : ' placeholder'), view.meta || '\u00a0'));
+    if (view.tag) screenEl.appendChild(view.tag);
+    if (view.meta || view.reserve) {
+      screenEl.appendChild(el('p', 'meta' + (view.meta ? '' : ' placeholder') + (view.metaPlain ? ' is-plain' : ''), view.meta || '\u00a0'));
+    }
+    if (view.body) screenEl.appendChild(view.body);
     if (view.notice) screenEl.appendChild(noticeEl(view.notice));
     if (view.hint || view.reserve) screenEl.appendChild(el('p', 'hint' + (view.hint ? '' : ' placeholder'), view.hint || '\u00a0'));
     clear(actionsEl);
@@ -797,7 +1219,8 @@
       if (a.primary && !primary) primary = b;
     });
     // One sentence for screen readers, instead of re-reading the whole screen on every change.
-    statusEl.textContent = answer + view.title + (view.line ? '. ' + view.line : '');
+    statusEl.textContent = answer + view.title + (view.line ? '. ' + view.line : '') + (view.say ? ' ' + view.say : '') +
+      (view.hint && view.state !== 'loading' ? ' ' + view.hint : '');
     if (hadFocus) (primary || title).focus();
     if (view.state === 'loading') {
       // Slow venue Wi-Fi, a slow GPS fix or an Apps Script cold start: say it is still working.
@@ -819,7 +1242,7 @@
 
   function fitTheme() {
     var root = document.documentElement;
-    ['--c-surface', '--c-muted', '--c-accent-ink', '--c-accent-text', '--c-button', '--c-link-ink', '--c-danger-ink'].forEach(function (p) {
+    ['--c-surface', '--c-muted', '--c-accent-ink', '--c-accent-text', '--c-button', '--c-link-ink', '--c-link-text', '--c-danger-ink'].forEach(function (p) {
       root.style.removeProperty(p);
     });
     var probe = document.createElement('span');
@@ -845,6 +1268,7 @@
     set('--c-accent-ink', readable(accent, [bg, surface], 3));
     set('--c-accent-text', readable(accent, [bg], 4.5));
     set('--c-link-ink', readable(read('--link'), [surface], 3)); // secondary button labels are large text
+    set('--c-link-text', readable(read('--link'), [surface], 4.5));
     set('--c-danger-ink', readable(read('--danger'), [bg, surface], 4.5));
     set('--c-button', readable(accent, [read('--accent-fg')], 3)); // its label is large bold text
     probe.remove();

@@ -117,6 +117,7 @@
   window.Telegram = {
     WebApp: {
       initData: sc.initData !== undefined ? sc.initData : 'user=%7B%22id%22%3A42%7D&auth_date=1790000000&hash=mock',
+      initDataUnsafe: { user: sc.tgUser || { id: 42, first_name: 'Cy', last_name: 'Member' } },
       platform: platform,
       version: version,
       colorScheme: params.get('theme') === 'dark' ? 'dark' : 'light',

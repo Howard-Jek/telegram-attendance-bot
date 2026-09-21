@@ -1,8 +1,9 @@
 /**
- * Web app entry point. One endpoint:
- *   POST <exec-url>, text/plain body {action, initData, platform, location?}
- *   -> {ok, code, message, data?}
- * Apps Script always answers HTTP 200, so the outcome is carried in `code`.
+ * Web app entry point. Two callers share doPost:
+ *   - the Mini App: POST <exec-url>, text/plain body {action, initData, platform, ...}
+ *     -> {ok, code, message, data?}. Apps Script always answers HTTP 200 (after a redirect),
+ *     so the outcome is carried in `code`.
+ *   - Telegram's webhook: POST <exec-url>?hook=<WEBHOOK_SECRET>, a JSON update (Webhook.gs).
  *
  * Keep top-level code to plain constants: Apps Script runs files in project order,
  * so a top-level reference to another file's function can fail at load time.
@@ -10,7 +11,7 @@
 
 const MESSAGES_ = {
   NO_ACTIVE_SESSION: 'No check-in is open right now.',
-  NOT_ADMIN: 'Only admins can start a check-in.',
+  NOT_ADMIN: 'Only admins of the group can start or move a check-in.',
   NOT_MEMBER: 'Only members of the group can check in. If you just joined, try again in a minute.',
   UNSUPPORTED_PLATFORM: 'Open this on your phone to check in.',
   AUTH_FAILED: 'Could not verify your Telegram account. Close this and tap the Check in button in the group again.',
@@ -18,6 +19,15 @@ const MESSAGES_ = {
   BUSY: 'The server is busy. Please try again in a moment.',
   BAD_REQUEST: 'Invalid request.',
   SERVER_ERROR: 'Something went wrong. Please try again, or tell an admin.',
+};
+
+// Called with (ctx, body). Wrapped in functions so no other file is referenced at load time.
+const ACTIONS_ = {
+  status: (ctx) => handleStatus_(ctx),
+  startSession: (ctx, body) => handleStartSession_(ctx, body),
+  moveSite: (ctx, body) => handleMoveSite_(ctx, body),
+  checkin: (ctx, body) => handleCheckin_(ctx, body),
+  saveProfile: (ctx, body) => handleSaveProfile_(ctx, body),
 };
 
 /** Owner-fixable setup problem; its message is safe to show to users. */
@@ -30,6 +40,7 @@ class SetupError_ extends Error {
 
 function doPost(e) {
   openedSpreadsheet_ = null;
+  if (e && e.parameter && e.parameter.hook !== undefined) return handleWebhook_(e);
   let res;
   try {
     res = handleRequest_(e);
@@ -49,7 +60,7 @@ function handleRequest_(e) {
     // falls through to BAD_REQUEST
   }
   const action = body && typeof body === 'object' ? body.action : null;
-  if (['status', 'startSession', 'checkin'].indexOf(action) === -1) {
+  if (!Object.prototype.hasOwnProperty.call(ACTIONS_, action)) {
     return reply_(false, 'BAD_REQUEST', MESSAGES_.BAD_REQUEST);
   }
 
@@ -60,9 +71,7 @@ function handleRequest_(e) {
   if (!auth.ok) return reply_(false, auth.code, MESSAGES_[auth.code]);
 
   const ctx = { cfg: cfg, token: token, user: auth.user };
-  if (action === 'status') return handleStatus_(ctx);
-  if (action === 'startSession') return handleStartSession_(ctx);
-  return handleCheckin_(ctx, body);
+  return ACTIONS_[action](ctx, body);
 }
 
 function reply_(ok, code, message, data) {

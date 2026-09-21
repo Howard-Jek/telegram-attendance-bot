@@ -1,27 +1,49 @@
 /**
- * One-off helpers the owner runs from the Apps Script editor.
- * Phase 3 adds findGroupChatId, postEntryMessage and installTriggers.
+ * One-off helpers the owner runs from the Apps Script editor (pick the function, press Run).
+ *
+ *   setup()     after installing or updating: prepares the Sheet, connects the bot's webhook,
+ *               adds /checkin to the bot's command menu and installs the 5-minute close job.
+ *               Safe to run again at any time.
+ *   selfTest()  offline checks of initData verification and distance maths.
  */
 
+function setup() {
+  setupSheets();
+  const token = botToken_();
+  const me = tgCall_(token, 'getMe', {});
+  if (!me.ok) throw new Error('Telegram rejected BOT_TOKEN (' + me.description + '). Check the BOT_TOKEN Script Property.');
+  const username = me.result.username;
+  PropertiesService.getScriptProperties().setProperty('BOT_USERNAME', username);
+  connectWebhook_(token);
+  if (!CONFIG_CHECKS_.GROUP_CHAT_ID(loadConfig_())) ensureConnectCode_();
+  setBotCommands_(token);
+  installTriggers_();
+  setupReport_(token, me.result).forEach((line) => Logger.log(line));
+}
+
 /**
- * Creates any missing tabs with headers, seeds Config keys, and records this Sheet's id
- * so the web app can open it. Safe to run repeatedly.
+ * Creates any missing tabs and header cells (an update's new columns are appended; data is never
+ * moved), seeds Config keys, and records this Sheet's id so the web app can open it.
  */
 function setupSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet(); // works here (editor), but not inside the web app
   PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
+  openedSpreadsheet_ = ss;
   ss.setSpreadsheetTimeZone(TZ_); // Sheets shows Date cells in the spreadsheet's zone, not the script's
 
   Object.keys(HEADERS_).forEach((name) => {
     const sheet = ss.getSheetByName(name) || ss.insertSheet(name);
     // A pre-existing tab may be smaller than the ranges formatted below.
     if (sheet.getMaxRows() < 2) sheet.insertRowsAfter(sheet.getMaxRows(), 999);
-    const cols = HEADERS_[name].length;
-    if (sheet.getMaxColumns() < cols) sheet.insertColumnsAfter(sheet.getMaxColumns(), cols - sheet.getMaxColumns());
-    if (sheet.getLastRow() === 0) {
-      sheet.getRange(1, 1, 1, HEADERS_[name].length).setValues([HEADERS_[name]]).setFontWeight('bold');
-      sheet.setFrozenRows(1);
+    const headers = HEADERS_[name];
+    if (sheet.getMaxColumns() < headers.length) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
     }
+    const current = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+    headers.forEach((h, i) => {
+      if (isBlank_(current[i])) sheet.getRange(1, i + 1).setValue(h).setFontWeight('bold');
+    });
+    sheet.setFrozenRows(1);
   });
 
   // Plain-text values, so "111,222" or "-100123..." are never reformatted as numbers.
@@ -31,6 +53,9 @@ function setupSheets() {
   Object.keys(CONFIG_DEFAULTS_).forEach((key) => {
     if (existing.indexOf(key) === -1) config.appendRow([key, String(CONFIG_DEFAULTS_[key])]);
   });
+  ['SITE_LAT', 'SITE_LNG'].forEach((key) => {
+    if (existing.indexOf(key) !== -1) Logger.log(key + ' is no longer used (each check-in is centred on the admin who starts it). You can delete that Config row.');
+  });
 
   const stamp = 'yyyy-mm-dd hh:mm:ss';
   const sessions = ss.getSheetByName(SHEETS_.SESSIONS);
@@ -39,8 +64,81 @@ function setupSheets() {
     const sheet = ss.getSheetByName(name);
     sheet.getRange(2, 1, sheet.getMaxRows() - 1, 1).setNumberFormat(stamp);
   });
+  const members = ss.getSheetByName(SHEETS_.MEMBERS);
+  members.getRange(2, MEMBER_COL_.UPDATED_AT, members.getMaxRows() - 1, 1).setNumberFormat(stamp);
+}
 
-  Logger.log('Sheets ready. Fill in Config: SITE_LAT, SITE_LNG, ADMIN_IDS, GROUP_CHAT_ID, MINI_APP_LINK.');
+/** Points the bot's webhook at this web app, with a secret only Telegram and this script know. */
+function connectWebhook_(token) {
+  const props = PropertiesService.getScriptProperties();
+  let secret = props.getProperty('WEBHOOK_SECRET');
+  if (!secret) {
+    secret = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+    props.setProperty('WEBHOOK_SECRET', secret);
+  }
+  const base = props.getProperty('WEBAPP_URL') || WEBAPP_URL_;
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(base)) {
+    throw new Error('WEBAPP_URL must be the web app\'s /exec URL (Deploy → Manage deployments).');
+  }
+  const res = tgCall_(token, 'setWebhook', {
+    url: base + '?hook=' + secret,
+    allowed_updates: ['message', 'my_chat_member', 'chat_member'],
+    max_connections: 10,
+    drop_pending_updates: true,
+  });
+  if (!res.ok) throw new Error('Telegram refused the webhook: ' + res.description);
+}
+
+/** A one-time code for the connect link; used up when a group connects. */
+function ensureConnectCode_() {
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('CONNECT_CODE')) props.setProperty('CONNECT_CODE', Utilities.getUuid().replace(/-/g, ''));
+}
+
+function setBotCommands_(token) {
+  const commands = [{ command: 'checkin', description: 'Check in' }];
+  [{ type: 'all_group_chats' }, { type: 'default' }].forEach((scope) => {
+    const res = tgCall_(token, 'setMyCommands', { commands: commands, scope: scope });
+    if (!res.ok) Logger.log('Could not set the bot\'s command menu (' + scope.type + '): ' + res.description);
+  });
+}
+
+/** Exactly one close job, however many times setup() runs. */
+function installTriggers_() {
+  ScriptApp.getProjectTriggers()
+    .filter((t) => t.getHandlerFunction() === 'closeExpiredSessions')
+    .forEach((t) => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('closeExpiredSessions').timeBased().everyMinutes(5).create();
+}
+
+/** What setup() did, and what the owner still has to do. */
+function setupReport_(token, bot) {
+  const cfg = loadConfig_();
+  const lines = ['Setup finished for @' + bot.username + '. Webhook connected; close job runs every 5 minutes.'];
+  if (!CONFIG_CHECKS_.GROUP_CHAT_ID(cfg)) {
+    lines.push('NEXT: open this link on your phone and pick your group. It adds the bot as an admin and connects it ' +
+      '(one use only; run setup() again for a new one): https://t.me/' + bot.username + '?startgroup=' +
+      PropertiesService.getScriptProperties().getProperty('CONNECT_CODE') + '&admin=delete_messages');
+    if (cfg.adminIds.length) lines.push('(Anyone listed in ADMIN_IDS can also just add the bot to the group.)');
+  } else {
+    const res = tgCall_(token, 'getChatMember', { chat_id: cfg.groupChatId, user_id: bot.id });
+    const m = res.ok ? res.result : null;
+    if (!m) {
+      lines.push('WARNING: the bot cannot see group ' + cfg.groupChatId + ' (' + res.description + '). ' +
+        'Add it to your group as an admin, or clear GROUP_CHAT_ID and add it again.');
+    } else if (m.status !== 'administrator') {
+      lines.push('NEXT: make the bot an admin of the group, so it can check who is in the group.');
+    } else {
+      lines.push('Group ' + cfg.groupChatId + ' is connected and the bot is an admin.' +
+        (m.can_delete_messages === false ? ' Allow it to delete messages so /checkin messages are tidied away.' : ''));
+    }
+  }
+  if (!CONFIG_CHECKS_.MINI_APP_LINK(cfg)) lines.push('NEXT: put the Mini App link (https://t.me/<bot>/<app>) in Config → MINI_APP_LINK.');
+  const groups = readGroups_();
+  lines.push(groups.length
+    ? 'Groups members can pick: ' + groups.join(', ') + '.'
+    : 'Optional: list your groups on the Groups tab, one per row, and members will pick theirs after checking in.');
+  return lines;
 }
 
 /**

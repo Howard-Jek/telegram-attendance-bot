@@ -204,3 +204,58 @@ Follow https://core.telegram.org/bots/webapps (validating data received via the 
 - After 8 s of loading, the page shows "Still working".
 - Type is set in rem: iPhones follow the user's Text Size setting, and the stamp grows with the text.
 - The action button is sticky, so it stays reachable when large text makes a screen taller than the phone.
+
+## Changes requested by the owner (September 2026)
+The owner reopened two of the decisions above. This section overrides the table and the sections it contradicts.
+
+- **`/checkin` and a webhook (reopens "No `/checkin` command and no webhook").**
+  - The webhook shares `doPost` with the Mini App. It is told apart by `?hook=<WEBHOOK_SECRET>`.
+  - Apps Script can't read request headers, so Telegram's `secret_token` header can't be checked. The secret travels in the URL instead; `setup()` generates it and stores it in Script Properties.
+  - The redirect problem that motivated "no webhook" is avoided by answering with **HtmlService** output. Apps Script serves that with a plain 200, while ContentService output is served through a 302. This was verified against a real deployment on 2026-09-21: 200, no redirect. Updates are also de-duplicated by `update_id` (CacheService, 6 h).
+  - `/checkin` in the connected group deletes the command (if the bot may delete messages) and posts one "📍 Check in" URL button at the bottom of the chat. It replaces the previous button, so only one exists. Posts are at least 20 s apart, which keeps the bot under Telegram's group limit of about 20 messages a minute.
+  - `/start` or `/checkin` in a private chat replies with the same button.
+  - Because the bot is an admin, Telegram delivers every group message. The script drops anything that isn't a command before opening the Sheet.
+  - A bot can't open a Mini App directly from a group command, so `/checkin` → button → app is the shortest path.
+- **The group connects itself.** While `GROUP_CHAT_ID` is blank, the first group the bot joins (`my_chat_member`) is written into Config under the script lock, and the bot says so in that group.
+  - Once a group is connected, the bot tells any other group it's added to and leaves.
+  - To move the bot to another group, clear the cell first.
+  - Supergroup upgrades are followed automatically, from any of four signals:
+    - the old group's `migrate_to_chat_id` notice;
+    - the new group's `migrate_from_chat_id` notice;
+    - a `getChatMember` error that carries `migrate_to_chat_id`;
+    - the bot "joining" the new supergroup, confirmed by `getChat` on the old id.
+- **Admins are the group's Telegram admins** (creator or administrator), via `getChatMember`.
+  - The answer is cached for 5 minutes, and a `chat_member` update clears it at once.
+  - `ADMIN_IDS` is now optional and adds extra people.
+  - `status` now makes one Bot API call per person per 5 minutes; check-in reuses the cached answer.
+- **Each session is centred on the admin who starts it (replaces `SITE_LAT`/`SITE_LNG`).**
+  - `startSession` requires the admin's GPS fix, which must be as precise as a check-in (`MAX_ACCURACY_M`). It is stored on the Sessions row (`site_lat`, `site_lng`, `site_accuracy_m`).
+  - On Android the Mini App takes a fresh browser fix for the point, because Telegram's can be stale.
+  - `moveSite` lets an admin move the point to where they stand. The Mini App offers it to an admin who is told they're too far away, and then checks them in with the same fix.
+  - Sessions created before this change have no point and answer `NO_SITE`.
+- **Groups and full names.**
+  - The owner lists groups on the **Groups** tab.
+  - After checking in, a member taps their group. The first time, they also confirm their full name, prefilled from Telegram.
+  - `saveProfile` stores both on the **Members** tab (one row per person, editable by admins) and on that person's Log row.
+  - Later check-ins copy them onto the Log row automatically.
+  - Only group members can save a profile, and the group must be on the Groups tab.
+- **Close job.** `closeExpiredSessions` runs every 5 minutes (installed by `setup()`). It marks ended sessions closed and recounts from the Log. It turns the live button into "Check-in closed at 11:02 · 23 checked in" with a line of per-group counts.
+  - Sessions that ended over an hour earlier close without a post.
+  - Errors are logged, never thrown, so a failing trigger doesn't email the owner every 5 minutes.
+- **Privacy.** NOT_MEMBER and UNSUPPORTED_PLATFORM rows in Rejected no longer store a location.
+- **One setup step.** `setup()` replaces `setupSheets`/`findGroupChatId`/`installTriggers`/`postEntryMessage`. It:
+  - appends new columns and tabs without moving data;
+  - sets the webhook and the `/checkin` command menu;
+  - installs exactly one close job;
+  - logs what's left to do.
+  
+  It needs the added `script.scriptapp` scope, for the trigger.
+- **Security scan (2026-09-21, two LOW findings, both fixed):**
+  - *Connecting needs the owner.* A group connects only when:
+    - someone listed in `ADMIN_IDS` adds the bot, or
+    - the group is picked through the one-time connect link `setup()` prints (`t.me/<bot>?startgroup=<code>&admin=delete_messages`).
+
+    Otherwise anyone who knew the bot's @username could claim it while `GROUP_CHAT_ID` is blank.
+  - *Members get coarse distances.* An out-of-range member hears the distance rounded up to 50 m, or "more than 1 km". After 10 such answers per session they hear only "not within".
+    - This stops a member from trilaterating the check-in point, which is where an admin stood (maybe at home).
+    - Admins get exact figures, and the Rejected tab keeps them.
