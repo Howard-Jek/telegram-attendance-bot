@@ -6,9 +6,13 @@
 function handleStatus_(ctx) {
   const session = findActiveSession_(readSessions_(), now_().getTime());
   const mine = session ? findCheckin_(dedupeKey_(session.id, ctx.user.id)) : null;
+  const isAdmin = isAdmin_(ctx.user, ctx.cfg);
+  const view = session ? sessionView_(session) : null;
+  if (view && !isAdmin) delete view.startedByName; // anyone with the link can call status
   return reply_(true, 'OK', '', {
-    isAdmin: isAdmin_(ctx.user, ctx.cfg),
-    activeSession: session ? sessionView_(session) : null,
+    isAdmin: isAdmin,
+    sessionMinutes: ctx.cfg.sessionMinutes,
+    activeSession: view,
     myCheckin: mine ? { at: mine.at.toISOString(), atText: hhmm_(mine.at) } : null,
   });
 }

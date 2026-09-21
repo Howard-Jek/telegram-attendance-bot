@@ -222,6 +222,7 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
     logs: [],
     fetches: [],
     lockHeldElsewhere: false,
+    cache: new Map(), // CacheService.getScriptCache(): key -> {value, expires}
     props: { ...props },
     telegram, // method name -> (params) => JSON body, or throws
   };
@@ -264,6 +265,20 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
       flush: () => env.events.push({ type: 'flush' }),
     },
     LockService: { getScriptLock: () => lock },
+    CacheService: {
+      getScriptCache: () => ({
+        get: (k) => {
+          const e = env.cache.get(k);
+          if (!e || e.expires <= (env.nowMs || 0)) return null;
+          return e.value;
+        },
+        put: (k, v, ttlSec = 600) => {
+          if (!Number.isInteger(ttlSec) || ttlSec < 1 || ttlSec > 21600) throw new Error(`Invalid expiration ${ttlSec}`);
+          env.cache.set(k, { value: String(v), expires: (env.nowMs || 0) + ttlSec * 1000 });
+        },
+        remove: (k) => env.cache.delete(k),
+      }),
+    },
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: (k) => {

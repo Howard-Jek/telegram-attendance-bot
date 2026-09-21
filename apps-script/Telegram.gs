@@ -5,6 +5,10 @@
 
 const TELEGRAM_API_ = 'https://api.telegram.org/bot';
 
+// How long a membership answer is reused. Short, so joins and removals take effect quickly;
+// long enough that repeated attempts can't burn the UrlFetch quota or the bot's rate limit.
+const MEMBERSHIP_CACHE_SEC_ = { MEMBER: 300, NOT_MEMBER: 60 };
+
 /** Calls a Bot API method and returns its JSON body ({ok, result} or {ok: false, error_code, description}). */
 function tgCall_(token, method, params) {
   let resp;
@@ -29,6 +33,17 @@ function tgCall_(token, method, params) {
     return { ok: false, error_code: resp.getResponseCode(), description: 'Unexpected response from Telegram' };
   }
   return body;
+}
+
+/** groupMembership_ behind a short CacheService cache. Rate limits and errors are never cached. */
+function cachedGroupMembership_(token, chatId, userId) {
+  const cache = CacheService.getScriptCache();
+  const key = 'member:' + chatId + ':' + userId;
+  const hit = cache.get(key);
+  if (hit === 'MEMBER' || hit === 'NOT_MEMBER') return hit;
+  const result = groupMembership_(token, chatId, userId);
+  if (MEMBERSHIP_CACHE_SEC_[result]) cache.put(key, result, MEMBERSHIP_CACHE_SEC_[result]);
+  return result;
 }
 
 /**

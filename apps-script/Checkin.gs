@@ -19,7 +19,7 @@ function handleCheckin_(ctx, body) {
   }
 
   // 3. Group membership: a network call, so it happens before taking the lock.
-  const membership = groupMembership_(ctx.token, cfg.groupChatId, user.id);
+  const membership = cachedGroupMembership_(ctx.token, cfg.groupChatId, user.id);
   if (membership === 'BUSY') return reply_(false, 'BUSY', MESSAGES_.BUSY);
   if (membership !== 'MEMBER') {
     logRejectedIfSessionOpen_(user, 'NOT_MEMBER', loc, cfg);
@@ -113,11 +113,20 @@ function appendRejected_(now, sessionId, user, reason, loc, distance) {
     distance === null ? '' : round1_(distance)]);
 }
 
-/** For rejections decided before the session lookup (steps 2–3): log only if a session is open. */
+/**
+ * For rejections decided before the session lookup (steps 2–3): log only if a session is
+ * open, and only once per person, session and reason. Anyone who can open the Mini App can
+ * reach these branches, so repeats must not be able to flood the sheet.
+ */
 function logRejectedIfSessionOpen_(user, reason, loc, cfg) {
   const now = now_();
   const session = findActiveSession_(readSessions_(), now.getTime());
   if (!session) return;
+  const cache = CacheService.getScriptCache();
+  const key = 'rejected:' + session.id + ':' + user.id + ':' + reason;
+  if (cache.get(key)) return;
+  const ttlSec = Math.min(21600, Math.max(1, Math.ceil((session.closesAt.getTime() - now.getTime()) / 1000)));
+  cache.put(key, '1', ttlSec);
   const distance = loc ? haversineM_(loc.lat, loc.lng, cfg.siteLat, cfg.siteLng) : null;
   appendRejected_(now, session.id, user, reason, loc, distance);
 }

@@ -11,10 +11,10 @@
 const MESSAGES_ = {
   NO_ACTIVE_SESSION: 'No check-in is open right now.',
   NOT_ADMIN: 'Only admins can start a check-in.',
-  NOT_MEMBER: 'Only members of the group can check in.',
+  NOT_MEMBER: 'Only members of the group can check in. If you just joined, try again in a minute.',
   UNSUPPORTED_PLATFORM: 'Open this on your phone to check in.',
-  AUTH_FAILED: 'Could not verify your Telegram account. Close this and tap Check in in the group again.',
-  AUTH_EXPIRED: 'This page has been open too long. Close it and tap Check in in the group again.',
+  AUTH_FAILED: 'Could not verify your Telegram account. Close this and tap the Check in button in the group again.',
+  AUTH_EXPIRED: 'This page has been open too long. Close it and tap the Check in button in the group again.',
   BUSY: 'The server is busy. Please try again in a moment.',
   BAD_REQUEST: 'Invalid request.',
   SERVER_ERROR: 'Something went wrong. Please try again, or tell an admin.',

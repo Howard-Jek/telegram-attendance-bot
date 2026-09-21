@@ -111,8 +111,8 @@ test('status: member vs admin, with and without a session', () => {
   s = env.req('status', MEMBER);
   assert.equal(s.data.activeSession.sessionId, 'S-20260921-1030');
   assert.equal(s.data.activeSession.closesAtText, '11:30');
-  assert.equal(s.data.activeSession.startedByName, 'Ada Admin');
   assert.equal(s.data.myCheckin, null);
+  assert.equal(env.req('status', ADMIN2).data.activeSession.startedByName, 'Ada Admin');
 
   env.setNow(T0 + 2 * MIN);
   env.checkin(MEMBER);
@@ -701,4 +701,86 @@ test('getChatMember "not found" errors are logged with Telegram\'s description',
   env.req('startSession', ADMIN);
   assert.equal(env.checkin(OUTSIDER).code, 'NOT_MEMBER');
   assert.ok(env.logs.some((l) => l.level === 'warn' && l.text.includes('member not found') && l.text.includes(String(OUTSIDER.id))));
+});
+
+// ---------- security scan findings (CLAUDE-SECURITY-20260921-114219) ----------
+
+test('F1: repeated pre-lock rejections write one Rejected row per person, session and reason', () => {
+  const env = setup({ statuses: { [OUTSIDER.id]: 'left' } });
+  env.req('startSession', ADMIN);
+  for (let i = 0; i < 5; i++) env.checkin(MEMBER, ONSITE, { platform: 'weba' });
+  for (let i = 0; i < 5; i++) assert.equal(env.checkin(OUTSIDER).code, 'NOT_MEMBER');
+  env.checkin(OUTSIDER, ONSITE, { platform: 'tdesktop' });
+  assert.deepEqual(env.rows('Rejected').map((r) => [r[2], r[5]]), [
+    [MEMBER.id, 'UNSUPPORTED_PLATFORM'], [OUTSIDER.id, 'NOT_MEMBER'], [OUTSIDER.id, 'UNSUPPORTED_PLATFORM'],
+  ]);
+  // The next session logs again.
+  env.setNow(T0 + 61 * MIN);
+  env.req('startSession', ADMIN);
+  env.checkin(MEMBER, ONSITE, { platform: 'weba' });
+  assert.equal(env.rows('Rejected').length, 4);
+});
+
+test('F1: in-lock rejections (LOW_ACCURACY / OUT_OF_RANGE) are still logged on every retry', () => {
+  const env = setup();
+  env.req('startSession', ADMIN);
+  env.checkin(MEMBER, BLURRY);
+  env.checkin(MEMBER, BLURRY);
+  env.checkin(MEMBER, OFFSITE);
+  assert.equal(env.rows('Rejected').length, 3);
+});
+
+test('F2: membership results are cached briefly, so repeats do not each call the Bot API', () => {
+  const env = setup({ statuses: { [OUTSIDER.id]: 'left' } });
+  env.req('startSession', ADMIN);
+  const calls = () => env.fetches.filter((f) => f.url.endsWith('/getChatMember')).length;
+
+  for (let i = 0; i < 10; i++) assert.equal(env.checkin(OUTSIDER).code, 'NOT_MEMBER');
+  assert.equal(calls(), 1);
+  env.setNow(T0 + 61 * 1000); // non-member results expire after a minute
+  env.checkin(OUTSIDER);
+  assert.equal(calls(), 2);
+
+  env.checkin(MEMBER, BLURRY);
+  env.checkin(MEMBER, BLURRY);
+  env.checkin(MEMBER);
+  env.checkin(MEMBER);
+  assert.equal(calls(), 3, 'one call covers a member for 5 minutes');
+  env.setNow(T0 + 61 * 1000 + 5 * MIN + 1000);
+  env.checkin(MEMBER);
+  assert.equal(calls(), 4);
+});
+
+test('F2: rate limits and errors are never cached', () => {
+  let answer = { ok: false, error_code: 429, description: 'Too Many Requests: retry after 1' };
+  const env = setup({ statuses: { [MEMBER.id]: () => answer } });
+  env.req('startSession', ADMIN);
+  assert.equal(env.checkin(MEMBER).code, 'BUSY');
+  answer = { ok: true, result: { status: 'member' } };
+  assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN');
+});
+
+test('F2: a member removed from the group is refused once the cached result expires', () => {
+  let status = 'member';
+  const env = setup({ statuses: { [MEMBER.id]: () => ({ ok: true, result: { status } }) } });
+  env.req('startSession', ADMIN);
+  assert.equal(env.checkin(MEMBER, BLURRY).code, 'LOW_ACCURACY');
+  status = 'kicked';
+  env.setNow(T0 + 5 * MIN + 1000);
+  assert.equal(env.checkin(MEMBER).code, 'NOT_MEMBER');
+});
+
+test('F4: status shows who started the session only to admins', () => {
+  const env = setup();
+  env.req('startSession', ADMIN);
+  const member = env.req('status', MEMBER).data.activeSession;
+  assert.equal('startedByName' in member, false);
+  assert.equal(member.closesAtText, '11:30');
+  assert.equal(env.req('status', OUTSIDER).data.activeSession.startedByName, undefined);
+  assert.equal(env.req('status', ADMIN2).data.activeSession.startedByName, 'Ada Admin');
+});
+
+test('status reports SESSION_MINUTES so the Start button can say how long a session lasts', () => {
+  assert.equal(setup().req('status', ADMIN).data.sessionMinutes, 60);
+  assert.equal(setup({ config: { SESSION_MINUTES: '45' } }).req('status', ADMIN).data.sessionMinutes, 45);
 });
