@@ -1,0 +1,7 @@
+# Secrets never go in the repo (BOT_TOKEN lives in Script Properties only)
+.env*
+!.env.example
+.clasprc.json
+
+node_modules/
+.DS_Store
