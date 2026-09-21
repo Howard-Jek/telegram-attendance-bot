@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mini App layout audit</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; }
+  iframe { border: 0; position: absolute; left: -20000px; top: 0; }
+</style>
+<h1>Mini App layout audit</h1>
+<p id="summary">Running…</p>
+<pre id="out"></pre>
+<!-- Runs the ui-craft audit (copied to /.audit/ui_audit.js, git-ignored) on every scenario's
+     final screen at 375px and 1280px in each theme. window.__audit holds the findings. -->
+<script src="scenarios.js"></script>
+<script>
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  async function until(fn, ms) {
+    var end = Date.now() + ms;
+    while (Date.now() < end) { try { if (fn()) return true; } catch (e) {} await wait(50); }
+    return false;
+  }
+
+  async function audit(src, name, theme, width) {
+    var sc = SCENARIOS[name];
+    var frame = document.createElement('iframe');
+    frame.style.width = width + 'px';
+    frame.style.height = (width < 500 ? 740 : 800) + 'px';
+    frame.src = 'harness.html?scenario=' + encodeURIComponent(name) + '&theme=' + theme;
+    document.body.appendChild(frame);
+    var doc = function () { return frame.contentDocument; };
+    var state = function () { return doc().body && doc().body.getAttribute('data-state'); };
+    for (var i = 0; i < (sc.steps || []).length; i++) {
+      var step = sc.steps[i];
+      if (step.waitState) await until(function () { return state() === step.waitState; }, 8000);
+      var label = step.click || step.doubleClick;
+      if (label) {
+        await until(function () {
+          return Array.prototype.some.call(doc().querySelectorAll('#actions button'), function (b) { return b.textContent === label; })
+            && state() !== 'loading';
+        }, 8000);
+        var btn = Array.prototype.find.call(doc().querySelectorAll('#actions button'), function (b) { return b.textContent === label; });
+        btn.click();
+        if (step.doubleClick) btn.click();
+      }
+    }
+    var reached = await until(function () { return state() === sc.expect.state; }, 8000);
+    await wait(450); // let entrance animations finish
+    var report = reached ? frame.contentWindow.eval(src) : { errors: [{ type: 'state', message: 'never reached ' + sc.expect.state }], warnings: [] };
+    frame.remove();
+    return { name: name, theme: theme, width: width, errors: report.errors, warnings: report.warnings, coverage: report.coverage };
+  }
+
+  (async function () {
+    var src = await (await fetch('/.audit/ui_audit.js')).text();
+    var params = new URLSearchParams(location.search);
+    var themes = (params.get('themes') || 'light,dark,washed').split(',');
+    var widths = (params.get('widths') || '375,1280').split(',').map(Number);
+    var names = params.get('only') ? params.get('only').split(',') : Object.keys(SCENARIOS);
+    var jobs = [];
+    names.forEach(function (n) { themes.forEach(function (t) { widths.forEach(function (w) { jobs.push([n, t, w]); }); }); });
+    var results = [];
+    for (var i = 0; i < jobs.length; i += 6) {
+      results = results.concat(await Promise.all(jobs.slice(i, i + 6).map(function (j) { return audit(src, j[0], j[1], j[2]); })));
+    }
+    var errors = results.filter(function (r) { return r.errors.length; });
+    var warnings = results.filter(function (r) { return r.warnings.length; });
+    document.getElementById('summary').textContent = results.length + ' screens audited: ' +
+      errors.length + ' with errors, ' + warnings.length + ' with warnings';
+    document.getElementById('out').textContent = JSON.stringify(errors.concat(warnings), null, 1);
+    window.__audit = { screens: results.length, errors: errors, warnings: warnings, sampleCoverage: results[0] && results[0].coverage };
+  })();
+</script>

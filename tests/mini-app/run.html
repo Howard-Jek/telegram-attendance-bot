@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mini App scenarios</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; }
+  .pass { color: #1b7f3b; } .fail { color: #b3261e; font-weight: 600; }
+  iframe { width: 390px; height: 700px; border: 1px solid #ccc; position: absolute; left: -10000px; }
+  td { padding: 2px 8px; vertical-align: top; }
+</style>
+<h1>Mini App scenarios</h1>
+<p id="summary">Running…</p>
+<table id="results"></table>
+<!-- Runs every scenario in scenarios.js against the real web/index.html and checks the result.
+     Serve the repo root and open /tests/mini-app/run.html; window.__results holds the outcome. -->
+<script src="scenarios.js"></script>
+<script>
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  async function until(fn, ms) {
+    var end = Date.now() + ms;
+    while (Date.now() < end) {
+      try { if (fn()) return true; } catch (e) { /* frame not ready */ }
+      await wait(50);
+    }
+    return false;
+  }
+
+  function buttons(doc) {
+    return Array.prototype.map.call(doc.querySelectorAll('#actions button'), function (b) { return b.textContent; });
+  }
+
+  async function run(name) {
+    var sc = SCENARIOS[name];
+    var errors = [];
+    var frame = document.createElement('iframe');
+    frame.src = 'harness.html?scenario=' + encodeURIComponent(name);
+    document.body.appendChild(frame);
+    var doc = function () { return frame.contentDocument; };
+    var win = function () { return frame.contentWindow; };
+    var state = function () { return doc().body && doc().body.getAttribute('data-state'); };
+    var text = function () { return doc().getElementById('screen').textContent; };
+
+    for (var i = 0; i < (sc.steps || []).length; i++) {
+      var step = sc.steps[i];
+      if (step.waitState && !(await until(function () { return state() === step.waitState; }, 8000))) {
+        errors.push('never reached ' + step.waitState + ' (at ' + state() + ')');
+        break;
+      }
+      (step.text || []).forEach(function (t) { if (text().indexOf(t) === -1) errors.push('step text missing: ' + t); });
+      var label = step.click || step.doubleClick;
+      if (label) {
+        var ok = await until(function () {
+          return buttons(doc()).indexOf(label) !== -1 && state() !== 'loading';
+        }, 8000);
+        if (!ok) { errors.push('no button ' + label + ' (at ' + state() + ')'); break; }
+        var btn = Array.prototype.find.call(doc().querySelectorAll('#actions button'), function (b) { return b.textContent === label; });
+        btn.focus();
+        btn.click();
+        if (step.doubleClick) btn.click();
+        await wait(30);
+      }
+    }
+
+    var e = sc.expect;
+    if (!errors.length && !(await until(function () { return state() === e.state; }, 8000))) {
+      errors.push('state ' + state() + ', expected ' + e.state);
+    }
+    await wait(150); // let any extra requests show up
+    await until(function () { return (e.text || []).every(function (t) { return text().indexOf(t) !== -1; }); }, 3000);
+    if (!errors.length) {
+      var log = win().__mini;
+      (e.text || []).forEach(function (t) { if (text().indexOf(t) === -1) errors.push('text missing: ' + t); });
+      (e.notText || []).forEach(function (t) { if (text().indexOf(t) !== -1) errors.push('unexpected text: ' + t); });
+      if (e.buttons && JSON.stringify(buttons(doc())) !== JSON.stringify(e.buttons)) errors.push('buttons ' + JSON.stringify(buttons(doc())));
+      (e.notButtons || []).forEach(function (b) { if (buttons(doc()).indexOf(b) !== -1) errors.push('unexpected button ' + b); });
+      if (e.calls) {
+        var actions = log.calls.map(function (c) { return c.action; });
+        if (JSON.stringify(actions) !== JSON.stringify(e.calls)) errors.push('calls ' + JSON.stringify(actions));
+      }
+      log.calls.forEach(function (c) {
+        if (typeof c.initData !== 'string' || !c.initData) errors.push('request without initData');
+        if (c.platform !== (sc.platform || 'android')) errors.push('request platform ' + c.platform);
+      });
+      if (e.sentLocations) {
+        var all = log.calls.filter(function (c) { return c.action === 'checkin'; }).map(function (c) { return c.location; });
+        if (JSON.stringify(all) !== JSON.stringify(e.sentLocations)) errors.push('sent locations ' + JSON.stringify(all));
+      }
+      if (e.nativeConfirms !== undefined && log.nativeConfirms !== e.nativeConfirms) errors.push('native confirm x' + log.nativeConfirms);
+      if (e.openedLinks && JSON.stringify(log.openedLinks) !== JSON.stringify(e.openedLinks)) errors.push('links ' + JSON.stringify(log.openedLinks));
+      if (e.stampFits) {
+        var st = doc().querySelector('.stamp'), tm = doc().querySelector('.stamp-time'), lb = doc().querySelector('.stamp-label');
+        var fs = parseFloat(win().getComputedStyle(tm).fontSize);
+        if (tm.getBoundingClientRect().height > fs * 1.5) errors.push('stamp time wraps');
+        var inner = st.clientWidth - 16;
+        if (tm.scrollWidth > inner || lb.scrollWidth > inner) errors.push('stamp text wider than the ring');
+      }
+      if (e.sentLocation) {
+        var sent = log.calls.filter(function (c) { return c.action === 'checkin'; }).map(function (c) { return c.location; })[0];
+        if (JSON.stringify(sent) !== JSON.stringify(e.sentLocation)) errors.push('sent location ' + JSON.stringify(sent));
+      }
+      if (e.confirmed && JSON.stringify(log.confirmed) !== JSON.stringify(e.confirmed)) errors.push('confirm ' + JSON.stringify(log.confirmed));
+      if (e.openedSettings !== undefined && log.openedSettings !== e.openedSettings) errors.push('openSettings x' + log.openedSettings);
+      if (e.closed !== undefined && log.closed !== e.closed) errors.push('close x' + log.closed);
+      if (doc().querySelector('#screen img')) errors.push('user text rendered as HTML');
+      if (e.focusInApp && !doc().getElementById('app').contains(doc().activeElement)) errors.push('focus lost to ' + doc().activeElement.tagName);
+      if (win().document.documentElement.scrollWidth > win().innerWidth) errors.push('horizontal overflow');
+    }
+    frame.remove();
+    return { name: name, pass: errors.length === 0, errors: errors };
+  }
+
+  (async function () {
+    var names = Object.keys(SCENARIOS);
+    var only = new URLSearchParams(location.search).get('only');
+    if (only) names = names.filter(function (n) { return n === only; });
+    // Focus lives in one frame at a time, so scenarios that check focus run one by one afterwards.
+    var focusChecks = names.filter(function (n) { return SCENARIOS[n].expect.focusInApp; });
+    var results = await Promise.all(names.filter(function (n) { return focusChecks.indexOf(n) === -1; }).map(run));
+    for (var i = 0; i < focusChecks.length; i++) results.push(await run(focusChecks[i]));
+    var table = document.getElementById('results');
+    results.forEach(function (r) {
+      var row = table.insertRow();
+      row.insertCell().textContent = r.name;
+      var c = row.insertCell();
+      c.textContent = r.pass ? 'pass' : 'FAIL: ' + r.errors.join('; ');
+      c.className = r.pass ? 'pass' : 'fail';
+    });
+    var failed = results.filter(function (r) { return !r.pass; }).length;
+    document.getElementById('summary').textContent = (results.length - failed) + '/' + results.length + ' scenarios passed';
+    window.__results = { total: results.length, failed: failed, results: results };
+  })();
+</script>

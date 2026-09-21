@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini App gallery</title>
+<style>
+  body { margin: 0; padding: 16px; font: 14px/1.4 system-ui, sans-serif; background: #e7e9ee; color: #16181d; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  nav a { margin-right: 8px; color: #1f5f99; }
+  nav a[aria-current] { font-weight: 700; color: #16181d; }
+  .grid { display: flex; flex-wrap: wrap; gap: 24px; }
+  figure { margin: 0; }
+  figcaption { margin-bottom: 6px; font-weight: 600; }
+  iframe { display: block; width: 375px; height: 740px; border: 0; border-radius: 24px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.12); background: #fff; }
+</style>
+<header>
+  <h1>Check-in Mini App: every state at 375px</h1>
+  <nav id="themes"></nav>
+</header>
+<div class="grid" id="grid"></div>
+<!-- Dev-only preview of web/index.html. Each frame is the real page with scripted Telegram/backend mocks. -->
+<script src="scenarios.js"></script>
+<script>
+  var SHOW = [
+    ['member-auto-checkin', 'Checked in (auto, one tap)'],
+    ['admin-auto-checkin', 'Admin, checked in'],
+    ['admin-idle', 'Admin, no session'],
+    ['admin-start-warning', 'Admin just started (with warning)', ['Start check-in (60 min)']],
+    ['member-no-session', 'Member, no session'],
+    ['loading', 'Loading'],
+    ['out-of-range', 'Too far away'],
+    ['low-accuracy-then-retry', 'Location too rough', [], 'failed'],
+    ['not-member', 'Not a member'],
+    ['location-denied', 'Location denied (this bot)'],
+    ['ios-telegram-lacks-permission', 'Location off for Telegram (iOS)'],
+    ['android-location-off', 'Phone Location switched off'],
+    ['approximate-location', 'Approximate location only'],
+    ['gps-timeout', 'GPS timed out'],
+    ['sdk-failed-in-telegram', 'Telegram script failed to load'],
+    ['auth-expired', 'Page timed out'],
+    ['busy-twice', 'Server busy'],
+    ['desktop', 'Telegram Desktop / Web'],
+    ['outside-telegram', 'Opened outside Telegram'],
+    ['hostile-names', 'Hostile name + long message'],
+  ];
+  var theme = new URLSearchParams(location.search).get('theme') || 'light';
+  var nav = document.getElementById('themes');
+  Object.keys(THEMES).forEach(function (t) {
+    var a = document.createElement('a');
+    a.href = '?theme=' + t;
+    a.textContent = t;
+    if (t === theme) a.setAttribute('aria-current', 'page');
+    nav.appendChild(a);
+  });
+  var grid = document.getElementById('grid');
+  SHOW.forEach(function (s) {
+    var fig = document.createElement('figure');
+    var cap = document.createElement('figcaption');
+    cap.textContent = s[1];
+    var frame = document.createElement('iframe');
+    frame.title = s[1];
+    frame.src = 'harness.html?scenario=' + s[0] + '&theme=' + theme;
+    fig.appendChild(cap);
+    fig.appendChild(frame);
+    grid.appendChild(fig);
+    // Perform any clicks needed to reach the state (e.g. the admin Start button).
+    (s[2] || []).forEach(function (label) {
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries++;
+        var doc = frame.contentDocument;
+        var btn = doc && Array.prototype.find.call(doc.querySelectorAll('#actions button'), function (b) { return b.textContent === label; });
+        if (btn || tries > 100) { clearInterval(timer); if (btn) btn.click(); }
+      }, 100);
+    });
+  });
+</script>

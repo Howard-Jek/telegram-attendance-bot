@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mini App harness</title>
+<!-- Loads the real web/index.html with Telegram and the backend replaced by scripted mocks.
+     Usage (serve the repo root): /tests/mini-app/harness.html?scenario=member-auto-checkin&theme=light -->
+<script src="scenarios.js"></script>
+<script>
+  (async function () {
+    var params = new URLSearchParams(location.search);
+    var sc = window.SCENARIOS[params.get('scenario') || 'member-auto-checkin'] || {};
+    var html = await (await fetch('/web/index.html', { cache: 'no-store' })).text();
+    var sdk = /<script src="https:\/\/telegram\.org\/js\/telegram-web-app\.js[^"]*"><\/script>/;
+    if (!sdk.test(html)) throw new Error('telegram-web-app.js tag not found in index.html');
+    html = html.replace(sdk, '<script src="/tests/mini-app/scenarios.js"><\/script><script src="/tests/mini-app/mock-telegram.js"><\/script>');
+    var api = /var API_URL = '[^']*';/;
+    if (!api.test(html)) throw new Error('API_URL constant not found in index.html');
+    html = html.replace(api, "var API_URL = '" + (sc.apiUrl || 'https://script.google.com/macros/s/MOCK/exec') + "';");
+    // Same behaviour, shorter waits, so scenarios run in seconds.
+    var timing = /var TIMING = \{[\s\S]*?\};/;
+    if (!timing.test(html)) throw new Error('TIMING constant not found in index.html');
+    html = html.replace(timing, 'var TIMING = { retryAfter: 150, request: 5000, location: 4000, telegramSilent: 300, grace: 400, browserLocation: 2000, slowHint: 400 };');
+    // Simulate a large system font size (Android scales CSS font sizes).
+    var scale = Number(params.get('fontScale') || sc.fontScale || 1);
+    if (scale !== 1) {
+      var t = { small: 13, label: 15, body: 16, button: 19, title: 25, stamp: 49 };
+      var css = Object.keys(t).map(function (k) { return '--t-' + k + ':' + Math.round(t[k] * scale) + 'px'; }).join(';');
+      html = html.replace('</style>', ':root{' + css + '}</style>');
+    }
+    // Telegram opens Mini Apps with its launch data in the URL hash.
+    if (sc.hash) history.replaceState(null, '', location.pathname + location.search + '#' + sc.hash);
+    document.open();
+    document.write(html);
+    document.close();
+  })();
+</script>

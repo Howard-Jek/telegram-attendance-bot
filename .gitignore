@@ -5,3 +5,12 @@
 
 node_modules/
 .DS_Store
+
+# Local copy of the ui-craft audit script (tests/mini-app/audit.html loads it)
+.audit/
+
+# clasp project file: your script and Sheet ids (not secret, but kept out of the public repo)
+.clasp.json
+
+# Local Claude Code session config
+.claude/

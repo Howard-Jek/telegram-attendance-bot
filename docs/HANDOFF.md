@@ -1,0 +1,198 @@
+# Telegram Attendance Bot: Build Handoff
+
+The owner's original brief, kept for reference. Implementation decisions made along the way are listed at the end.
+
+## Goal
+Group members check in by tapping a button in a Telegram group. Each check-in records **server time, Telegram identity, and real device GPS** to a Google Sheet. Admins open a check-in **session** that lasts 60 minutes. Each person can be recorded only once per session. **Only one session can exist at a time, and no admin can start a second session while one is active.**
+
+Keep it minimal. There is no always-on server, no framework, and no build step.
+
+## Decisions already made (please don't reopen these)
+| Decision | Why |
+|---|---|
+| Backend = Google Apps Script web app bound to the Sheet | No server to maintain; writes to the Sheet natively |
+| Frontend = one static `index.html` Telegram Mini App on GitHub Pages | Reads device GPS directly with no map, so users can't drag a pin |
+| Entry = direct-link Mini App (`t.me/<bot>/<app>`) in a URL button | Inline `web_app` buttons are private-chat only; direct links work in groups |
+| No `/checkin` command and no webhook | Apps Script returns 302 redirects to Telegram webhooks, so updates pile up and retry. Sessions start from the Mini App instead, and the bot only makes outbound calls |
+| Identity = verified Telegram `initData`, never client-sent names | Names can't be forged |
+| All time rules use Apps Script server time (`Asia/Singapore`) | Phone clocks can't stretch the window |
+| No "end session early" in v1 | Guarantees nobody can close and reopen within the hour |
+
+## Architecture
+```
+Group message [📍 Check in] (URL button → t.me/<bot>/<app>)
+        │
+        ▼
+Mini App (GitHub Pages, index.html)
+  - Telegram.WebApp.initData (signed identity)
+  - GPS via Telegram LocationManager, falling back to navigator.geolocation (high accuracy)
+        │  POST text/plain JSON (avoids CORS preflight)
+        ▼
+Apps Script web app doPost  ──►  Google Sheet (Config / Sessions / Log / Rejected)
+        │
+        └──►  Telegram Bot API (outbound only: getChatMember, sendMessage, editMessageText)
+```
+
+## Repo layout
+```
+apps-script/
+  appsscript.json      # timeZone "Asia/Singapore", V8 runtime, webapp config
+  Main.gs              # doPost router + JSON responses
+  Auth.gs              # initData parsing + HMAC verification
+  Sessions.gs          # start session, active-session lookup, close job
+  Checkin.gs           # check-in validation + writes
+  Telegram.gs          # Bot API helpers (UrlFetchApp)
+  Config.gs            # reads Config tab once per request
+  Setup.gs             # one-off helpers: findGroupChatId, postEntryMessage, installTriggers, selfTest
+web/
+  index.html           # Mini App, with inline CSS/JS
+tools/
+  sign-initdata.js     # Node: generates a validly signed fake initData for selfTest
+README.md              # owner setup + deploy steps
+```
+Use `clasp` to push and deploy Apps Script from the CLI. Always redeploy to the **existing** deployment ID (`clasp deploy -i <id>`) so the /exec URL never changes.
+
+## Sheet schema
+**Config** (key | value). The owner fills these in; code reads them once per request.
+`SITE_LAT`, `SITE_LNG`, `RADIUS_M` (default 150), `MAX_ACCURACY_M` (default 100), `SESSION_MINUTES` (60), `INITDATA_MAX_AGE_MIN` (15), `ADMIN_IDS` (comma-separated Telegram user IDs), `GROUP_CHAT_ID`, `MINI_APP_LINK`.
+`BOT_TOKEN` lives in **Script Properties only**. It is never stored in the Sheet and never logged.
+
+**Sessions**: `session_id | started_by_id | started_by_name | opens_at | closes_at | announcement_message_id | status (open/closed) | checkin_count`
+Session ID format: `S-yyyyMMdd-HHmm`.
+
+**Log** (accepted check-ins only, one row per person per session):
+`timestamp | session_id | user_id | first_name | last_name | username | latitude | longitude | accuracy_m | distance_m | dedupe_key`
+`dedupe_key` = `<session_id>:<user_id>`. Look it up with TextFinder (matchEntireCell).
+
+**Rejected**: `timestamp | session_id | user_id | name | username | reason | latitude | longitude | accuracy_m | distance_m`
+Log `NOT_MEMBER`, `UNSUPPORTED_PLATFORM`, `LOW_ACCURACY`, and `OUT_OF_RANGE` here. **Never** log duplicates, no-session attempts, or auth failures.
+
+Write timestamps as `Date` objects so Sheets formats them in SGT.
+
+## Backend API
+Single endpoint: `POST <apps-script-exec-url>`, body `{ action, initData, platform, location? }`, where location is `{ lat, lng, accuracy }`.
+Response: `{ ok: bool, code: string, message: string (user-facing), data?: object }`.
+
+| action | Purpose |
+|---|---|
+| `status` | Called on Mini App open. Returns `{ isAdmin, activeSession: {sessionId, closesAt, startedByName} \| null, myCheckin: {at} \| null }` |
+| `startSession` | Admin opens a session |
+| `checkin` | Member checks in |
+
+Codes: `CHECKED_IN, ALREADY_CHECKED_IN, NO_ACTIVE_SESSION, SESSION_STARTED, SESSION_ACTIVE, NOT_ADMIN, NOT_MEMBER, OUT_OF_RANGE, LOW_ACCURACY, UNSUPPORTED_PLATFORM, AUTH_FAILED, AUTH_EXPIRED, BUSY`.
+
+## Business rules
+
+### startSession (in this order)
+1. Verify initData → `AUTH_FAILED`. Check auth_date age ≤ `INITDATA_MAX_AGE_MIN` → `AUTH_EXPIRED`.
+2. User ID in `ADMIN_IDS` → otherwise `NOT_ADMIN`.
+3. Acquire `LockService.getScriptLock()` (waitLock 10s, else `BUSY`).
+4. If **any** session has `closes_at > now` → `SESSION_ACTIVE`, with `closesAt` and `startedByName`. Write nothing. This applies to every admin, including the one who started it.
+5. Create the Sessions row (`opens_at = now`, `closes_at = now + SESSION_MINUTES`). Release the lock.
+6. Outside the lock: `sendMessage` to the group ("📍 Check-in open until HH:mm", with the check-in URL button) and store `message_id`. If sending fails, the session stays valid; return a warning in `message`.
+
+Two admins tapping Start at the same moment must produce exactly one session. The lock plus step 4 guarantees this.
+
+### checkin (in this order)
+1. Verify initData → `AUTH_FAILED` / `AUTH_EXPIRED`.
+2. `platform` must be `android` or `ios` → otherwise `UNSUPPORTED_PLATFORM`. This is client-reported, so it's a UX guard, not a security control.
+3. `getChatMember(GROUP_CHAT_ID, user_id)`. Status must be creator, administrator, member, or restricted with `is_member=true` → otherwise `NOT_MEMBER`. Do this before the lock because it's a network call.
+4. Acquire the script lock (as above).
+5. The active session is the one where `opens_at ≤ now < closes_at` → otherwise `NO_ACTIVE_SESSION`.
+6. `dedupe_key` already in Log → `ALREADY_CHECKED_IN`, returning the original time. **Write nothing.**
+7. `accuracy > MAX_ACCURACY_M` → `LOW_ACCURACY` (write to Rejected).
+8. Haversine distance to the site `> RADIUS_M` → `OUT_OF_RANGE` (write to Rejected).
+9. Append to Log, increment `checkin_count`, release the lock → `CHECKED_IN`.
+
+Users rejected at steps 7–8 may retry. Only an accepted check-in counts toward dedupe.
+
+### Close job
+Install a time-driven trigger that runs every 5 minutes. It finds `status=open AND closes_at ≤ now`, sets `status=closed`, and edits the announcement to "Check-in closed at HH:mm, N checked in" with the button removed. This is cosmetic only; enforcement is always `closes_at` vs. server time.
+
+## initData verification (easy to get wrong)
+Follow https://core.telegram.org/bots/webapps (validating data received via the Mini App) and verify against the current docs:
+1. Parse the raw `initData` query string **manually**, since Apps Script has no `URLSearchParams`. Split on `&` and `=`, then `decodeURIComponent` each value.
+2. `data_check_string` = every field **except `hash`**, sorted by key, formatted as `key=value` and joined with `\n`. Fields like `signature` **are included**.
+3. `secret_key = HMAC_SHA256(key="WebAppData", message=BOT_TOKEN)`.
+4. `computed = hex(HMAC_SHA256(key=secret_key, message=data_check_string))`. Use the `Byte[]` overload of `Utilities.computeHmacSha256Signature` for this step.
+5. Apps Script bytes are **signed** (-128..127). Hex-encode with `(b & 0xff).toString(16).padStart(2, '0')`.
+6. Compare to `hash`, then check `auth_date` freshness. Take the user from the parsed `user` JSON only.
+
+`tools/sign-initdata.js` (Node `crypto`) produces a signed sample with a fake token. `selfTest()` in Setup.gs must accept it, and must reject tampered or stale variants, **before** any real Telegram testing.
+
+## Mini App behaviour (web/index.html)
+- Load `https://telegram.org/js/telegram-web-app.js`, call `ready()` and `expand()`, and follow Telegram theme params for colours.
+- On open: call `status`, then render one of these states:
+  - **Desktop/web client** → "Open this on your phone to check in." Stop.
+  - **No session, member** → "No check-in open right now."
+  - **No session, admin** → [Start check-in (60 min)] behind `showConfirm`. After starting, show session info plus a manual [Check in] button. Admins are not auto-checked in.
+  - **Active session, already checked in** → "✅ Checked in at HH:mm. Session closes HH:mm."
+  - **Active session, not checked in** → **auto-attempt check-in immediately**, so the group tap is the only tap after first-run permission. On failure, show the reason and [Try again].
+  - **Admin during an active session** → the member view plus "Open until HH:mm, started by X". No Start button.
+- Location: `Telegram.WebApp.LocationManager.init()` then `getLocation()`. If access is denied, show [Open settings] using `LocationManager.openSettings()`. Fall back to `navigator.geolocation.getCurrentPosition({ enableHighAccuracy: true, maximumAge: 0, timeout: 15000 })` when LocationManager is unavailable. Confirm the exact API names against the current Mini Apps docs.
+- Never display or send a map or any manual location input.
+- The Apps Script /exec URL is a constant in the page. It isn't a secret; security rests on initData verification.
+
+## Setup helpers (Setup.gs)
+- `findGroupChatId()`: calls `getUpdates` (no webhook is set) and logs chat IDs. The owner first sends `/start@<bot>` in the group.
+- `postEntryMessage()`: posts the permanent "📍 Check in" message with the URL button. The owner pins it manually.
+- `installTriggers()`: idempotent. Installs the 5-minute close job without creating duplicates.
+- `selfTest()`: runs the initData tests above plus the haversine sanity checks.
+
+## Build phases (stop after each for my review)
+1. **Backend core**: Config, Auth (plus `sign-initdata.js` and `selfTest`), Sessions, Checkin, doPost router. `selfTest` passes.
+2. **Mini App**: `index.html` with every state above.
+3. **Telegram glue**: announcements, close job, setup helpers.
+4. **README**: owner setup and deploy guide, including clasp and GitHub Pages.
+
+## Acceptance tests
+1. Admin starts a session → Sessions row appears and the group gets an announcement with a button.
+2. Any admin tries to start during an active session → `SESSION_ACTIVE` with close time and starter, and no new row. Two simultaneous starts → exactly one session.
+3. On-site member during a session → exactly one Log row, SGT server timestamp, all fields filled.
+4. Same member again, including two rapid taps → no new row; the app shows the original time.
+5. After `closes_at` → `NO_ACTIVE_SESSION`; Start becomes available again.
+6. Off-site or poor accuracy → rejected, Rejected row written, retry allowed.
+7. Telegram Desktop or Web → blocked with the "open on phone" message.
+8. Non-member opens a forwarded link → `NOT_MEMBER`.
+9. Tampered initData → `AUTH_FAILED`. initData older than 15 min → `AUTH_EXPIRED`.
+10. Announcement shows closed with the count within about 5 min of close.
+11. Location permission denied → clear message plus a working [Open settings].
+
+## Out of scope for v1
+`/checkin` command or webhook, check-out, ending sessions early, multiple venues, dashboards or reports, mock-GPS detection.
+
+## Owner steps (things only I can do)
+1. @BotFather: create the bot and save the token. Add the bot to the group.
+2. Create the Google Sheet and the Apps Script project. Enable the Apps Script API (script.google.com/home/usersettings) for clasp, then run `clasp login`.
+3. Put `BOT_TOKEN` in Script Properties. Deploy the web app as **Execute as: Me, Access: Anyone**.
+4. Enable GitHub Pages for `web/`. Run BotFather `/newapp` with the Pages URL to get `MINI_APP_LINK`.
+5. Fill in Config (venue coordinates, radius, admin IDs), run `findGroupChatId`, `installTriggers`, and `postEntryMessage`, then pin the message.
+
+## Known limits (accepted)
+- GPS comes from the device. Mock-GPS apps and a technical user capturing their own initData on Desktop and POSTing made-up coordinates are accepted for v1.
+- Apps Script concurrency: fine for a few dozen simultaneous check-ins. On `BUSY`, the Mini App retries once after 2s.
+- The close-job timing is approximate (about 5 min), but enforcement is exact.
+
+## Implementation decisions (Phase 1–2)
+- Extra response codes: `OK` (status), `BAD_REQUEST` (malformed body / unknown action / missing location), `SERVER_ERROR` (exceptions, owner misconfiguration).
+- ok=true for OK, SESSION_STARTED, CHECKED_IN, ALREADY_CHECKED_IN; false otherwise.
+- NOT_MEMBER / UNSUPPORTED_PLATFORM are decided before the session lookup; they are written to Rejected only if a session is currently open (read without the lock), so no-session attempts are never logged.
+- Added setupSheets() (creates tabs/headers, seeds Config, sets spreadsheet TZ, plain-text Config values).
+- Added tests/ (Node emulator of Apps Script + node:test) and package.json (dev-only, no deps).
+- Step 6 of startSession (group announcement) is deferred to Phase 3 per the phase plan.
+- Requests open the Sheet by SPREADSHEET_ID (stored by setupSheets), because getActiveSpreadsheet() is unavailable in web-app executions; the manifest therefore asks for the full `spreadsheets` scope.
+- Fail closed (SERVER_ERROR naming the tab) if the Sessions/Log header row or a session's dates were edited into something unreadable.
+- Security scan fixes: pre-lock Rejected rows are written once per person, session and reason; getChatMember results are cached (MEMBER 5 min, NOT_MEMBER 1 min); status shows startedByName only to admins.
+- Formula-like names (= + - @ …) are stored with a visible leading apostrophe so CSV exports stay inert.
+- status also returns sessionMinutes (for the "Start check-in (N min)" label).
+- Mini App colours come from Telegram theme params. In JS, their lightness (OKLCH) is adjusted until they reach WCAG AA against the live theme, which keeps the theme's hue.
+- One automatic retry after 2 s on BUSY or an unreadable response, such as Apps Script's HTML overload page.
+- **Location order (departs from "LocationManager first").** On Android, Telegram's LocationManager returns the phone's cached last-known fix of any age (DrKLO/Telegram BotLocation.requestObject). So on Android the page asks the WebView's geolocation first (enableHighAccuracy, maximumAge 0) and falls back to LocationManager.
+- On iOS, LocationManager comes first. If it stays silent for 10 s (iOS sends nothing when Telegram lacks the phone's location permission), browser geolocation is tried, which fails fast in that case. Browser geolocation is also used when LocationManager is unavailable (clients before Bot API 8.0) or reports no accuracy.
+- A null LocationManager answer with access already granted means the phone's Location is off. The page shows "turn on Location" without Open settings, which would do nothing in that case.
+- On iOS, returning from Telegram's settings (the `activated` event) retries once.
+- Failure screens during a check-in carry a "NOT CHECKED IN" label, so a failure never reads as success. A very coarse accuracy (over 1 km) gets advice to turn on Precise Location.
+- If telegram-web-app.js fails to load inside Telegram, the page offers Reload instead of the "open from Telegram" copy.
+- A double tap on Start opens at most one confirmation.
+- Focus follows the screen for keyboard and screen-reader users.
+- After 8 s of loading, the page shows "Still working".
