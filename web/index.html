@@ -342,8 +342,8 @@
   var TIMING = {
     retryAfter: 2000,      // one automatic retry on BUSY
     request: 25000,        // per request, all copies included (Google drops uncollected replies after ~25 s)
-    hedgeFrame: 3000,      // no reply yet: send a second copy through the frame transport
-    hedgeFetch: 9000,      // still nothing: a third copy the normal way
+    hedgeSecond: 2500,     // no reply yet: a second copy the normal way
+    hedgeThird: 8000,      // still nothing: a third copy through the frame
     frameGrace: 2000,      // a hidden frame that loaded this long ago without a reply has failed
     location: 60000,       // includes the time someone takes to answer a permission prompt
     telegramSilent: 10000, // iOS never answers when Telegram itself lacks location permission
@@ -1046,10 +1046,11 @@
   var diagQueue = [];
   var pageStart = Date.now();
 
-  // Every action is safe to send twice (repeats are recognised on the server), so a request whose
-  // reply is slow gets extra copies, and the first reply wins. Apps Script's normal replies come
-  // back through Google's reply cache, which was measured taking 0.3-27 s and sometimes losing
-  // them; the frame transport (frameReply_ in Main.gs) is a second, independent way back.
+  // Replies come back through the frame transport (frameReply_ in Main.gs) first: Apps Script's
+  // normal replies pass through Google's reply cache, measured at 0.3-30 s and sometimes lost,
+  // while the frame's reply took ~1.6-2.6 s even then. Every action is safe to send twice
+  // (repeats are recognised on the server), so a slow request also gets a normal copy and then
+  // another frame copy, and the first reply wins.
   function api(action, extra, isRetry) {
     var body = { action: action, initData: tg.initData, platform: tg.platform };
     if (extra) for (var k in extra) body[k] = extra[k];
@@ -1074,11 +1075,11 @@
     });
   }
 
-  // Sends body the normal way at once, then extra copies after hedgeFrame (frame) and hedgeFetch
-  // (normal), or straight away when a copy fails. Resolves {res, via, ms, failures}; res is null
-  // if nothing usable came back in time.
+  // Sends body through the frame at once, then a normal copy after hedgeSecond and another frame
+  // copy after hedgeThird, or straight away when a copy fails. Resolves {res, via, ms, failures};
+  // res is null if nothing usable came back in time.
   function exchange(body) {
-    var plan = [['fetch', 0], ['frame', TIMING.hedgeFrame], ['fetch', TIMING.hedgeFetch]];
+    var plan = [['frame', 0], ['fetch', TIMING.hedgeSecond], ['frame', TIMING.hedgeThird]];
     return new Promise(function (resolve) {
       var t0 = Date.now();
       var done = false;

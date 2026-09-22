@@ -55,7 +55,7 @@
     setTimeout(function () {
       mark('answered:' + body.action);
       window.postMessage({ attendanceReply: true, rid: rid, res: next }, location.origin);
-    }, sc.frameDelay || 60);
+    }, sc.frameDelay || sc.apiDelay || 60);
   };
 
   // ---------- the WebView's own geolocation ----------
