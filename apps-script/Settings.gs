@@ -3,7 +3,8 @@
  * members must be, and how precise their location must be. They are the Config tab's
  * SESSION_MINUTES, RADIUS_M and MAX_ACCURACY_M, so the owner can still edit them there too.
  * The distance and accuracy apply at once, including to a check-in that is open; the time applies
- * to the next check-in started.
+ * to the next check-in started. While a check-in is open, only the admin who started it may change
+ * them (isStarter_ in Sessions.gs).
  */
 
 // Name in the app -> Config key, and the whole numbers accepted from the app.
@@ -41,16 +42,23 @@ function handleSaveSettings_(ctx, body) {
     return reply_(false, 'INVALID_SETTINGS', 'Invalid request.', { errors: {} });
   }
 
-  // Under the script lock, so two admins saving at once can't both add a missing Config row.
+  // Under the script lock, so two admins saving at once can't both add a missing Config row, and
+  // so the check for an open check-in can't be overtaken by another admin starting one.
   const saved = withScriptLock_(() => {
     const cache = CacheService.getScriptCache();
     const seen = saveId ? 'settings-save:' + saveId : null;
     if (seen && cache.get(seen)) return 'repeat';
+    const now = now_().getTime();
+    const sessions = readSessions_();
+    cacheSessions_(sessions, now);
+    const open = findBlockingSession_(sessions, now);
+    if (open && !isStarter_(open, ctx.user)) return notStarter_('SETTINGS_LOCKED', open, 'change the settings');
     setConfigValues_(values);
     if (seen) cache.put(seen, '1', 3600);
     return 'saved';
   });
   if (!saved) return reply_(false, 'BUSY', MESSAGES_.BUSY);
+  if (typeof saved === 'object') return saved; // someone else's check-in is open
   if (saved === 'saved') console.info('Check-in settings changed by user ' + ctx.user.id + ': ' + JSON.stringify(values));
   return reply_(true, 'SETTINGS_SAVED', 'Saved.', settingsView_(loadConfig_(true)));
 }

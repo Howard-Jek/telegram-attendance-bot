@@ -13,6 +13,7 @@ function handleStatus_(ctx) {
   if (mine === undefined) mine = findCheckin_(dedupeKey_(session.id, ctx.user.id));
   const view = session ? sessionView_(session) : null;
   if (view && !admin) delete view.startedByName; // anyone with the link can call status
+  if (view && admin) view.startedByMe = isStarter_(session, ctx.user); // only they may change it
   const data = {
     isAdmin: admin,
     sessionMinutes: ctx.cfg.sessionMinutes,
@@ -79,6 +80,7 @@ function handleStartSession_(ctx, body) {
   // Announce in the group outside the lock: it is a network call, and a failure must not undo the session.
   const s = result.session;
   const data = sessionView_(s);
+  data.startedByMe = true;
   const posted = announceSession_(ctx, s);
   if (!posted.ok) {
     const canShare = CONFIG_CHECKS_.MINI_APP_LINK(cfg);
@@ -104,14 +106,30 @@ function handleMoveSite_(ctx, body) {
     const sessions = readSessions_();
     const session = findActiveSession_(sessions, nowMs);
     if (!session) return reply_(false, 'NO_ACTIVE_SESSION', MESSAGES_.NO_ACTIVE_SESSION);
+    if (!isStarter_(session, ctx.user)) return notStarter_('NOT_STARTER', session, 'move its check-in point');
     sheet_(SHEETS_.SESSIONS).getRange(session.row, SESSION_COL_.SITE_LAT, 1, 3)
       .setValues([[site.lat, site.lng, round1_(site.accuracy)]]);
     session.site = { lat: site.lat, lng: site.lng };
     cacheSessions_(sessions, nowMs);
     console.info('Session ' + session.id + ' check-in point moved by user ' + ctx.user.id);
-    return reply_(true, 'SITE_MOVED', 'The check-in point is now where you are.', sessionView_(session));
+    return reply_(true, 'SITE_MOVED', 'The check-in point is now where you are.', Object.assign(sessionView_(session), { startedByMe: true }));
   });
   return result || reply_(false, 'BUSY', MESSAGES_.BUSY);
+}
+
+/**
+ * A check-in belongs to the admin who started it: while it is open, only they may move its point or
+ * change the settings it runs under (other admins could otherwise undo their choices mid-session).
+ * The owner can still edit the Sheet.
+ */
+function isStarter_(session, user) {
+  return String(session.startedById) === String(user.id);
+}
+
+function notStarter_(code, session, what) {
+  return reply_(false, code, session.startedByName + ' started this check-in, so only they can ' + what +
+    ' until it closes at ' + hhmm_(session.closesAt) + '.',
+  { startedByName: session.startedByName, closesAtText: hhmm_(session.closesAt) });
 }
 
 /**

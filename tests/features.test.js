@@ -398,16 +398,16 @@ test('location: check-ins are measured from wherever that session was started', 
   assert.ok(log[1][9] > 50 && log[1][9] < 60, 'distance from the second session\'s point');
 });
 
-test('location: an admin can move the check-in point to where they stand', () => {
+test('location: the admin who started it can move the check-in point to where they stand', () => {
   const env = setup();
   const WRONG = { lat: SITE.lat + 0.02, lng: SITE.lng, accuracy: 10 }; // started from the car park, 2 km off
   env.start(ADMIN, WRONG);
   assert.equal(env.checkin(MEMBER, ONSITE).code, 'OUT_OF_RANGE');
 
   assert.equal(env.req('moveSite', MEMBER, { location: SITE_FIX }).code, 'NOT_ADMIN');
-  assert.equal(env.req('moveSite', ADMIN2, { location: BLURRY }).code, 'LOW_ACCURACY');
-  assert.equal(env.req('moveSite', ADMIN2, { location: null }).code, 'BAD_REQUEST');
-  const moved = env.req('moveSite', ADMIN2, { location: SITE_FIX });
+  assert.equal(env.req('moveSite', ADMIN, { location: BLURRY }).code, 'LOW_ACCURACY');
+  assert.equal(env.req('moveSite', ADMIN, { location: null }).code, 'BAD_REQUEST');
+  const moved = env.req('moveSite', ADMIN, { location: SITE_FIX });
   assert.equal(moved.code, 'SITE_MOVED');
   assert.equal(moved.data.closesAtText, '11:30');
   assert.deepEqual(env.rows('Sessions')[0].slice(8, 11), [SITE_FIX.lat, SITE_FIX.lng, SITE_FIX.accuracy]);
@@ -1211,4 +1211,53 @@ test('settings: a late copy of an earlier save (same saveId) never undoes a newe
   assert.equal(saveSettings(env, ADMIN, { radiusM: 300, saveId: 'x'.repeat(200) }).code, 'INVALID_SETTINGS');
   assert.equal(saveSettings(env, ADMIN, { radiusM: 300, saveId: 42 }).code, 'INVALID_SETTINGS');
   assert.equal(env.config('RADIUS_M'), '150');
+});
+
+// ---------- one admin's check-in is theirs to change ----------
+
+test('starter: while a check-in is open, only the admin who started it can change settings', () => {
+  const env = setup({ config: { ADMIN_IDS: String(MEMBER2.id) } });
+  env.start(ADMIN);
+  for (const other of [ADMIN2, MEMBER2]) {
+    const r = saveSettings(env, other, { radiusM: 5000 });
+    assert.equal(r.code, 'SETTINGS_LOCKED', 'group admin or ADMIN_IDS, it is not theirs');
+    assert.match(r.message, /Ada Admin started this check-in/);
+    assert.equal(r.data.startedByName, 'Ada Admin');
+    assert.equal(r.data.closesAtText, '11:30');
+  }
+  assert.equal(env.config('RADIUS_M'), '150');
+  assert.equal(saveSettings(env, ADMIN, { radiusM: 200 }).code, 'SETTINGS_SAVED');
+  // Once it has ended, any admin can change them again.
+  env.setNow(T0 + 60 * MIN);
+  assert.equal(saveSettings(env, ADMIN2, { radiusM: 300 }).code, 'SETTINGS_SAVED');
+  assert.equal(env.config('RADIUS_M'), '300');
+});
+
+test('starter: a settings form opened before another admin started is refused when saved', () => {
+  const env = setup();
+  const before = env.req('status', ADMIN2).data;
+  assert.equal(before.activeSession, null); // B opens the form: nothing is open yet
+  env.start(ADMIN); // meanwhile A starts
+  assert.equal(saveSettings(env, ADMIN2, { maxAccuracyM: 500 }).code, 'SETTINGS_LOCKED');
+  assert.equal(env.config('MAX_ACCURACY_M'), '100');
+});
+
+test('starter: only the admin who started it can move the check-in point', () => {
+  const env = setup({ config: { ADMIN_IDS: String(MEMBER2.id) } });
+  env.start(ADMIN);
+  for (const other of [ADMIN2, MEMBER2]) {
+    const r = env.req('moveSite', other, { location: { lat: SITE.lat + 0.01, lng: SITE.lng, accuracy: 10 } });
+    assert.equal(r.code, 'NOT_STARTER');
+    assert.match(r.message, /Ada Admin started this check-in/);
+  }
+  assert.deepEqual(env.rows('Sessions')[0].slice(8, 10), [SITE_FIX.lat, SITE_FIX.lng]);
+});
+
+test('starter: status tells each admin whether they started the open check-in (members aren\'t told)', () => {
+  const env = setup();
+  const started = env.start(ADMIN);
+  assert.equal(started.data.startedByMe, true);
+  assert.equal(env.req('status', ADMIN).data.activeSession.startedByMe, true);
+  assert.equal(env.req('status', ADMIN2).data.activeSession.startedByMe, false);
+  assert.equal('startedByMe' in env.req('status', MEMBER).data.activeSession, false);
 });

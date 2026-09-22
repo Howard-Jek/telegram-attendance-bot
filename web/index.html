@@ -592,18 +592,22 @@
         if (admin && canChangeSettings() && d.accuracyM <= SETTINGS[2].max) line += ' If everyone here gets this, raise the accuracy limit in Check-in settings.';
       } else if (res.code === 'OUT_OF_RANGE' && admin && d.distanceM) {
         // An admin may just not have arrived yet, so Try again stays first; but if the check-in was
-        // started in the wrong place, they can move it from here.
+        // started in the wrong place, its admin can move it from here (another admin is told whom to ask).
         lastDistanceM = d.distanceM;
         title = 'You’re too far from the check-in point';
-        line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, you can move it to where you are.';
-        actions.push({ label: 'Move check-in point here', onClick: moveHere });
+        if (ownsCheckin()) {
+          line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, you can move it to where you are.';
+          actions.push({ label: 'Move check-in point here', onClick: moveHere });
+        } else {
+          line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, ask ' + starterName() + ', who started this check-in, to move it.';
+        }
       } else if (res.code === 'OUT_OF_RANGE' && d.radiusM) {
         // Members get a rounded distance, or none (the server keeps the point's location private).
         var far = d.beyondM ? 'more than ' + metres(d.beyondM) : d.distanceM ? (d.rounded ? 'about ' : '') + metres(d.distanceM) : '';
         line = far
           ? 'You’re ' + far + ' from the venue. Check-in works within ' + metres(d.radiusM) + '.'
           : 'You’re not within ' + metres(d.radiusM) + ' of the venue.';
-      } else if (res.code === 'NO_SITE' && admin) {
+      } else if (res.code === 'NO_SITE' && admin && ownsCheckin()) {
         lastDistanceM = 0;
         line = 'This check-in doesn’t have a check-in point yet. Set it to where you’re standing.';
         actions = [{ label: 'Set check-in point here', primary: true, onClick: moveHere }];
@@ -800,6 +804,7 @@
         }
         working = false;
         if (res.code === 'NO_ACTIVE_SESSION') return loadStatus(false);
+        if (res.code === 'NOT_STARTER') return loadStatus(false, res.message); // another admin's check-in
         fail(res, moveNow, 'move');
       });
     });
@@ -1133,7 +1138,19 @@
   // An older server sends no maxAccuracyM and has no settings to save. (A bad value in the Sheet
   // arrives as null: the form is then the way to fix it.)
   function canChangeSettings() {
-    return !!(status && status.isAdmin === true && 'maxAccuracyM' in status);
+    return !!(status && status.isAdmin === true && 'maxAccuracyM' in status) && ownsCheckin();
+  }
+
+  // While a check-in is open, only the admin who started it may move its point or change the
+  // settings (the server enforces this; an older server doesn't say, so nothing is hidden).
+  function starterName() {
+    var s = status && status.activeSession;
+    return (s && s.startedByName) || 'the admin';
+  }
+
+  function ownsCheckin() {
+    var s = status && status.activeSession;
+    return !(s && s.startedByMe === false);
   }
 
   // Adds "Check-in settings" (last) to an admin's actions. cancel re-shows this screen; after a
@@ -1325,7 +1342,7 @@
       if (res.code === 'AUTH_FAILED' || res.code === 'AUTH_EXPIRED') return render(views.auth(res, ''));
       // The save may still have happened (a queued copy, or part of a failed write), or the admin
       // was demoted: Cancel then reloads instead of showing the numbers from before.
-      if (['NETWORK', 'BUSY', 'SERVER_ERROR', 'NOT_ADMIN'].indexOf(res.code) !== -1) settingsStale = true;
+      if (['NETWORK', 'BUSY', 'SERVER_ERROR', 'NOT_ADMIN', 'SETTINGS_LOCKED'].indexOf(res.code) !== -1) settingsStale = true;
       if (res.code === 'INVALID_SETTINGS' && res.data && res.data.errors && Object.keys(res.data.errors).length) settingsErrors = res.data.errors;
       else if (res.code === 'NETWORK') settingsNotice = 'Couldn’t confirm the save. Check your connection and try again.';
       else if (res.code === 'BUSY') settingsNotice = 'Busy right now: lots of people are checking in. Try again in a moment.';
