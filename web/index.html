@@ -507,9 +507,12 @@
         actions = [{ label: 'Share check-in link', primary: true, onClick: function () { share(data.shareLink); } }, checkInAction];
       }
       // No settings here: the next step is Check in, and its outcome (or the checked-in screen) offers them.
+      // The distance comes from the start reply: another admin may have changed it since this app loaded.
+      if (typeof data.radiusM === 'number') status.radiusM = data.radiusM;
+      if (typeof data.maxAccuracyM === 'number') status.maxAccuracyM = data.maxAccuracyM;
       return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
         line: 'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
-        meta: 'Open until ' + data.closesAtText, notice: data.warning, actions: actions,
+        meta: 'Open until ' + data.closesAtText + ' · within ' + radiusText(), notice: data.warning, actions: actions,
         hint: pointFromLastKnown ? 'Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.' : '' };
     },
     ready: function (line) {
@@ -612,7 +615,7 @@
         line = 'This check-in doesn’t have a check-in point yet. Set it to where you’re standing.';
         actions = [{ label: 'Set check-in point here', primary: true, onClick: moveHere }];
       } else if (res.code === 'NO_SITE') {
-        line = 'The check-in point isn’t set yet. Ask an admin to set it, then try again.';
+        line = 'The check-in point isn’t set yet. Ask ' + (admin ? starterName() + ', who started this check-in,' : 'an admin') + ' to set it, then try again.';
       } else if (res.code === 'NOT_MEMBER') {
         line = 'Only members of this group can check in. Just joined? Try again in a minute.';
       } else if (res.code === 'BUSY') {

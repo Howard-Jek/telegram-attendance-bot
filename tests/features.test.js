@@ -1261,3 +1261,11 @@ test('starter: status tells each admin whether they started the open check-in (m
   assert.equal(env.req('status', ADMIN2).data.activeSession.startedByMe, false);
   assert.equal('startedByMe' in env.req('status', MEMBER).data.activeSession, false);
 });
+
+test('starter: the start reply says which distance and accuracy the new check-in runs with', () => {
+  const env = setup();
+  saveSettings(env, ADMIN2, { radiusM: 500 }); // another admin, just before the start
+  const r = env.start(ADMIN);
+  assert.equal(r.data.radiusM, 500);
+  assert.equal(r.data.maxAccuracyM, 100);
+});

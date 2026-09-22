@@ -231,7 +231,7 @@ The owner reopened two of the decisions above. This section overrides the table 
 - **Each session is centred on the admin who starts it (replaces `SITE_LAT`/`SITE_LNG`).**
   - `startSession` requires the admin's GPS fix, which must be as precise as a check-in (`MAX_ACCURACY_M`). It is stored on the Sessions row (`site_lat`, `site_lng`, `site_accuracy_m`).
   - On Android the Mini App takes a fresh browser fix for the point, because Telegram's can be stale.
-  - `moveSite` lets an admin move the point to where they stand. The Mini App offers it to an admin who is told they're too far away, and then checks them in with the same fix.
+  - `moveSite` lets the admin who started the check-in move the point to where they stand (since 2026-09-22, only that admin). The Mini App offers it to them when they're told they're too far away, and then checks them in with the same fix.
   - Sessions created before this change have no point and answer `NO_SITE`.
 - **Groups and full names.**
   - The owner lists groups on the **Groups** tab.
@@ -311,6 +311,7 @@ The owner reopened two of the decisions above. This section overrides the table 
   - The group, `ADMIN_IDS` and `MINI_APP_LINK` are deliberately not settable from the app.
   - `setConfigValues_` writes the last row of a key that appears twice, since `loadConfig_` reads the last one.
   - The Mini App shows **Check-in settings** to admins on the start screen, the checked-in screen, the ready screen, and the "too far" and "not precise enough" failures.
+  - *Owner request (2026-09-22): a check-in belongs to the admin who started it.* While it is open, only its starter may save settings (`SETTINGS_LOCKED` otherwise) or move its point (`NOT_STARTER`). Both are checked under the script lock against the Sheet (`isStarter_` in Sessions.gs), so a form opened before another admin started is refused on save. Status tells admins `startedByMe`; the app hides the controls for other admins and names the starter. The start reply carries the distance and accuracy in effect, since another admin may have changed them just before. The owner can still edit the Sheet.
   - *Review (2026-09-22), four reviewers plus a verifier per finding.* No security issues. Fixed:
     - **Only changed values are sent.** The server treats a missing field as unchanged, so a screen opened before another admin's save can't undo it.
     - **Each save carries a `saveId`,** which the app's backup copies reuse. A copy that arrives after its save was applied, perhaps after a newer save, doesn't write again.

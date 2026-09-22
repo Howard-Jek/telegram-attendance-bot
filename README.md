@@ -61,6 +61,12 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 is on the start screen, the "Check-in is open" screen, the checked-in screen, and the "too far" and
 "not precise enough" screens, where a wrong limit is most likely to show.
 
+**A check-in belongs to the admin who started it.** While it is open, only that admin can change
+the settings or move its check-in point; other admins don't see those buttons, and are told whom
+to ask. When nothing is open, any admin can change the settings. You, as the owner, can always
+change them in the Config tab (and the check-in point on the Sessions tab), for example if an admin
+started one in the wrong place and left.
+
 - **How long check-in stays open**, 1–720 minutes. This applies from the next session.
 - **How close members must be**, 10–5000 m. This applies straight away, including to a
   session that's already open.

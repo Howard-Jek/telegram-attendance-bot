@@ -81,6 +81,9 @@ function handleStartSession_(ctx, body) {
   const s = result.session;
   const data = sessionView_(s);
   data.startedByMe = true;
+  // The rules it runs with, which another admin may have changed since this admin's app loaded.
+  data.radiusM = cfg.radiusM;
+  data.maxAccuracyM = cfg.maxAccuracyM;
   const posted = announceSession_(ctx, s);
   if (!posted.ok) {
     const canShare = CONFIG_CHECKS_.MINI_APP_LINK(cfg);
