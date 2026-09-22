@@ -77,7 +77,7 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 | Tab | What's in it | Who writes it |
 |---|---|---|
 | **Config** | Settings (see below) | You. The bot fills in `GROUP_CHAT_ID`. |
-| **Sessions** | One row per session: who started it, times, check-in point, final count | The bot |
+| **Sessions** | One row per session: who started it, times, check-in point, number checked in (updated every 5 minutes, final at close) | The bot |
 | **Log** | One row per check-in: time, Telegram name, location, distance, full name, group | The bot |
 | **Rejected** | Check-in attempts that were refused while a session was open, and why | The bot |
 | **Groups** | Your groups, one per row under the `group` header. Leave it empty to skip the group question. | You |
@@ -361,10 +361,17 @@ design/            design brief and the BotFather cover image
 ## Known limits
 
 - **Faked location.** GPS comes from the phone, so a mock-location app can fake it.
-- **Apps Script quotas.**
-  - Apps Script runs about 30 requests at once per account. That's fine for a few dozen people
-    checking in together; beyond that, the app retries.
-  - Apps Script allows 20,000 Telegram calls a day.
+- **Big crowds.** Check-ins are written to the Sheet one at a time, at about 1–2 a second.
+  - 140 people arriving over a few minutes check in at normal speed.
+  - 140 people tapping at the same moment all get in within about 1½–2 minutes: half within
+    about a minute, the last within about 100–120 s. People near the back of the queue see "Lots
+    of people are checking in right now" while the app keeps retrying for them, for up to 2½
+    minutes.
+  - Saving names and groups has its own queue, so it never slows down check-ins.
+  - Opening the app doesn't queue: 140 simultaneous opens were measured at 1.6 s median.
+  - Calling one group at a time keeps everyone's wait short. Tapping the bot's button is
+    lighter than everyone typing `/checkin`.
+- **Apps Script quotas.** Apps Script allows 20,000 Telegram calls a day, which is plenty.
 - **Phones only.** Check-in needs the Telegram app on Android or iPhone. Desktop and web
   Telegram show "open this on your phone".
 - **Result timing.** The closing message appears within 5 minutes of the session ending.

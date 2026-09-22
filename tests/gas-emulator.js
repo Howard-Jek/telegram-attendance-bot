@@ -256,6 +256,16 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
     releaseLock() { if (lock.held) env.events.push({ type: 'unlock' }); lock.held = false; },
   };
   env.lock = lock;
+  const userLock = {
+    held: false,
+    tryLock(ms) {
+      env.events.push({ type: 'tryUserLock', ms });
+      if (env.userLockHeldElsewhere) return false;
+      userLock.held = true;
+      return true;
+    },
+    releaseLock() { userLock.held = false; },
+  };
 
   const log = (level) => (...a) => env.logs.push({ level, text: a.map(String).join(' ') });
 
@@ -270,7 +280,9 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
       },
       flush: () => env.events.push({ type: 'flush' }),
     },
-    LockService: { getScriptLock: () => lock },
+    // The web app runs as its owner, so every request shares the owner's user lock: a second,
+    // independent lock. userLockHeldElsewhere simulates it being busy.
+    LockService: { getScriptLock: () => lock, getUserLock: () => userLock },
     CacheService: {
       getScriptCache: () => ({
         get: (k) => {

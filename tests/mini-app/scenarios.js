@@ -212,7 +212,22 @@
     'busy-twice': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })],
         checkin: [{ ok: false, code: 'BUSY', message: 'The server is busy. Please try again in a moment.' }] },
-      expect: { state: 'failed', text: ['Busy right now'], calls: ['status', 'checkin', 'checkin'] } },
+      expect: { state: 'failed', text: ['Busy right now', 'Not checked in'], waitMs: 20000 } },
+    // Still busy when the retry time runs out, but a queued copy did record them.
+    'busy-but-recorded': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION }),
+        status({ activeSession: MEMBER_SESSION, myCheckin: { at: '2026-09-21T02:32:07.000Z', atText: '10:32' } })],
+        checkin: [{ ok: false, code: 'BUSY', message: 'The server is busy. Please try again in a moment.' }] },
+      expect: { state: 'checked-in', text: ['10:32'], notText: ['Busy right now'], waitMs: 20000 } },
+    // A crowd: the server is busy several times in a row, then records the check-in.
+    'crowd-busy-then-in': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION })],
+        checkin: [{ ok: false, code: 'BUSY', message: 'busy' }, { ok: false, code: 'BUSY', message: 'busy' }, { ok: false, code: 'BUSY', message: 'busy' }, CHECKED_IN] },
+      expect: { state: 'checked-in', calls: ['status', 'checkin', 'checkin', 'checkin', 'checkin'], waitMs: 20000 } },
+    'crowd-busy-message': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION })],
+        checkin: [{ ok: false, code: 'BUSY', message: 'busy' }, { pending: true }] },
+      expect: { state: 'loading', text: ['Trying again…', 'Lots of people are checking in right now'] } },
     'network-down': { api: { status: [{ network: true }] },
       expect: { state: 'failed', text: ['Couldn’t reach the server'], calls: ['status', 'status', 'status'] } },
     // Replies come through the frame first; a normal copy follows if it is slow or fails.
@@ -408,7 +423,7 @@
 
     // Presentation-only states for screenshots and the layout audit.
     'loading': { api: { status: [{ pending: true }] }, expect: { state: 'loading', text: ['Still working'] } },
-    'retrying': { api: { status: [{ network: true }, { pending: true }] }, expect: { state: 'loading', text: ['Trying again…'], calls: ['status', 'status'] } },
+    'retrying': { api: { status: [{ network: true }, { pending: true }] }, expect: { state: 'loading', text: ['Trying again…'], viasStart: ['frame', 'fetch'], waitMs: 10000 } },
     'hostile-names': { location: { lm: GPS },
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION,
         { startedByName: 'Maximilian-Alexander Wolfeschlegelsteinhausenbergerdorff <img src=x onerror=alert(1)>' }) })],

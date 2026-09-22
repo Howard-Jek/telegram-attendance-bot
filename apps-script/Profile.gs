@@ -41,13 +41,12 @@ function handleSaveProfile_(ctx, body) {
   }
   if (!groups.length) group = '';
 
-  const result = withScriptLock_(() => {
+  const result = withProfileLock_(() => {
     const now = now_();
     upsertMember_(user, fullName, group, now);
-    // Already checked in to the open session? That Log row gets the new details too.
-    const sessions = readSessions_();
-    cacheSessions_(sessions, now.getTime());
-    const session = findActiveSession_(sessions, now.getTime());
+    // Already checked in to the open session? That Log row gets the new details too. Check-ins only
+    // ever append rows, so updating an existing row doesn't need the check-in lock.
+    const session = findActiveSession_(sessionsForRead_(), now.getTime());
     const mine = session ? findCheckin_(dedupeKey_(session.id, user.id)) : null;
     if (mine) {
       sheet_(SHEETS_.LOG).getRange(mine.row, LOG_COL_.FULL_NAME, 1, 2).setValues([[textCell_(fullName), groupCell_(group)]]);
@@ -108,7 +107,7 @@ function findMember_(userId) {
   return null;
 }
 
-/** Call with the script lock held. */
+/** Call with the profile lock held (withProfileLock_). */
 function upsertMember_(user, fullName, group, now) {
   const sheet = sheet_(SHEETS_.MEMBERS);
   const fields = [textCell_(fullName), groupCell_(group), textCell_(user.name), textCell_(user.username), now];

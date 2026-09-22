@@ -34,6 +34,16 @@ function handleCheckin_(ctx, body) {
   // Their saved name and group go on the Log row. Read before the lock; it changes rarely.
   const profile = profileData_(user.id);
 
+  // A repeat tap, or the app's backup copy of this request, is answered from the copy of who has
+  // checked in without queueing for the lock (which matters when a whole crowd checks in at once).
+  // The copy only says "yes" once the row is committed, so this can never let a duplicate in.
+  const openNow = findActiveSession_(sessionsForRead_(), now_().getTime());
+  const known = openNow ? knownCheckin_(openNow, user.id) : undefined;
+  if (known) {
+    return reply_(true, 'ALREADY_CHECKED_IN', 'You already checked in at ' + hhmm_(known.at) + '.',
+      Object.assign(checkinView_(openNow, known.at), profile));
+  }
+
   // 4. Everything that reads-then-writes happens under the script lock.
   const result = withScriptLock_(() => {
     const now = now_();
@@ -83,7 +93,8 @@ function handleCheckin_(ctx, body) {
     sheet_(SHEETS_.LOG).appendRow([now, session.id, Number(user.id), textCell_(user.firstName),
       textCell_(user.lastName), textCell_(user.username), loc.lat, loc.lng, round1_(loc.accuracy),
       round1_(distance), key, textCell_(p ? p.fullName : ''), groupCell_(p ? p.group : '')]);
-    sheet_(SHEETS_.SESSIONS).getRange(session.row, SESSION_COL_.COUNT).setValue(session.count + 1);
+    // checkin_count is left to the close job (refreshed every 5 minutes): one write per check-in
+    // keeps the time each holds the lock, and so the queue in a crowd, as short as possible.
     SpreadsheetApp.flush(); // the copy may only say "checked in" once the row is really there
     rememberCheckin_(session, user.id, now, now);
     return reply_(true, 'CHECKED_IN', 'Checked in at ' + hhmm_(now) + '.',

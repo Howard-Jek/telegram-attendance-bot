@@ -62,8 +62,9 @@ function describeSendError_(res) {
 }
 
 /**
- * Time-driven trigger (every 5 minutes, installed by setup()). Marks ended sessions closed with
- * the final count, and turns the live message into the result, broken down by group.
+ * Time-driven trigger (every 5 minutes, installed by setup()). Keeps checkin_count current for
+ * open sessions (check-ins don't write it), marks ended sessions closed with the final count,
+ * and turns the live message into the result, broken down by group.
  */
 function closeExpiredSessions() {
   openedSpreadsheet_ = null;
@@ -80,14 +81,20 @@ function closeExpiredSessions_() {
   const done = withScriptLock_(() => {
     const sessions = readSessions_();
     cacheSessions_(sessions, now.getTime()); // every run refreshes the copy, picking up hand edits
-    const due = sessions.filter((s) => s.status === 'open' && s.closesAt.getTime() <= now.getTime());
-    if (!due.length) return { closed: [] };
-    const tally = tallyLog_(due.map((s) => s.id));
+    const open = sessions.filter((s) => s.status === 'open');
+    if (!open.length) return { closed: [] };
+    const tally = tallyLog_(open.map((s) => s.id));
+    const due = open.filter((s) => s.closesAt.getTime() <= now.getTime());
     const sheet = sheet_(SHEETS_.SESSIONS);
-    due.forEach((s) => {
+    open.forEach((s) => {
       s.tally = tally[s.id];
-      sheet.getRange(s.row, SESSION_COL_.STATUS, 1, 2).setValues([['closed', s.tally.count]]);
+      if (due.indexOf(s) !== -1) {
+        sheet.getRange(s.row, SESSION_COL_.STATUS, 1, 2).setValues([['closed', s.tally.count]]);
+      } else if (s.count !== s.tally.count) {
+        sheet.getRange(s.row, SESSION_COL_.COUNT).setValue(s.tally.count);
+      }
     });
+    if (!due.length) return { closed: [] };
     // Only a session that just ended is announced; a backlog (e.g. the job was off) closes quietly.
     const recent = latest_(due.filter((s) => now.getTime() - s.closesAt.getTime() < ANNOUNCE_WINDOW_MS_));
     return { closed: due, recent: recent, live: recent ? takeLiveMessage_(recent.id) : null };

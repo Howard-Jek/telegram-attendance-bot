@@ -200,7 +200,8 @@ test('AT3: on-site member -> exactly one Log row, SGT server timestamp, all fiel
   assert.deepEqual([lat, lng, acc], [ONSITE.lat, ONSITE.lng, 20]);
   assert.ok(dist > 50 && dist < 60, `distance ${dist}`);
   assert.equal(key, `S-20260921-1030:${MEMBER.id}`);
-  assert.equal(env.rows('Sessions')[0][7], 1, 'checkin_count incremented');
+  env.call('closeExpiredSessions'); // the close job keeps checkin_count up to date
+  assert.equal(env.rows('Sessions')[0][7], 1, 'checkin_count refreshed');
   assert.equal(env.rows('Rejected').length, 0);
 });
 
@@ -218,6 +219,7 @@ test('AT4: same member again (and rapid repeats) -> no new row, original time re
   }
   assert.equal(env.rows('Log').length, 1);
   assert.equal(env.rows('Rejected').length, 0, 'duplicates are never logged');
+  env.call('closeExpiredSessions');
   assert.equal(env.rows('Sessions')[0][7], 1);
 });
 
@@ -381,6 +383,7 @@ test('a new session gives everyone a fresh check-in', () => {
   assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN');
   const keys = env.rows('Log').map((r) => r[10]);
   assert.deepEqual(keys, [`S-20260921-1030:${MEMBER.id}`, `S-20260921-1131:${MEMBER.id}`]);
+  env.call('closeExpiredSessions');
   assert.deepEqual(env.rows('Sessions').map((r) => r[7]), [1, 1]);
 });
 
@@ -463,6 +466,7 @@ test('race: two rapid taps -> one Log row, second sees ALREADY_CHECKED_IN', () =
   const second = env.checkin(MEMBER);
   assert.deepEqual([first.code, second.code], ['CHECKED_IN', 'ALREADY_CHECKED_IN']);
   assert.equal(env.rows('Log').length, 1);
+  env.call('closeExpiredSessions');
   assert.equal(env.rows('Sessions')[0][7], 1);
 });
 
@@ -522,6 +526,7 @@ test('checkin_count counts every accepted check-in', () => {
   env.start(ADMIN);
   for (const u of [MEMBER, MEMBER2, ADMIN]) assert.equal(env.checkin(u).code, 'CHECKED_IN');
   env.checkin(MEMBER);
+  env.call('closeExpiredSessions');
   assert.equal(env.rows('Sessions')[0][7], 3);
 });
 

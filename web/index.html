@@ -340,10 +340,13 @@
   var API_URL = 'https://script.google.com/macros/s/AKfycbz9ACA6aEHOyvUXNp38ty_ANlMjeDucefyH_mXjXHTGU8AaRKxVBX6jTgnYE9Wahehz/exec';
 
   var TIMING = {
-    retryAfter: 2000,      // one automatic retry on BUSY
+    retryAfter: 2000,      // base wait before retrying BUSY; each wait is 1-2.5x this, at random
+    busyBudget: 150000,    // keep retrying BUSY this long: 140 people at once take ~100-120 s to record
     request: 25000,        // per request, all copies included (Google drops uncollected replies after ~25 s)
-    hedgeSecond: 5000,     // no reply yet: a second copy the normal way (a frame reply takes ~3-4.5 s on a phone)
-    hedgeThird: 12000,     // still nothing: a third copy through the frame
+    hedgeSecond: 8000,     // no reply yet: a second copy the normal way (a frame reply takes ~3-4.5 s on a phone;
+                           // in a crowd the server may hold a request ~10 s, and copies would only add to the queue)
+    hedgeThird: 15000,     // still nothing: a third copy through the frame
+    failureGap: 1000,      // after a copy fails, the next follows 0.5-1.5x this later, not at once
     frameGrace: 2000,      // a hidden frame that loaded this long ago without a reply has failed
     location: 60000,       // includes the time someone takes to answer a permission prompt
     telegramSilent: 10000, // iOS never answers when Telegram itself lacks location permission
@@ -841,6 +844,21 @@
           fail(res, checkIn, 'checkin');
         });
       }
+      if (res.code === 'BUSY') {
+        // One of this request's queued copies may have been recorded after all. Asking costs
+        // nothing (status doesn't queue), and a wrong "Not checked in" would send them to try again.
+        return api('status').then(function (st) {
+          working = false;
+          var d = st.ok && st.data;
+          if (d && d.myCheckin && d.activeSession) {
+            status = d;
+            rememberCheckin({ atText: d.myCheckin.atText, closesAtText: d.activeSession.closesAtText, groups: d.groups, profile: d.profile });
+            haptic('success');
+            return showCheckedIn(true);
+          }
+          fail(res, checkIn, 'checkin');
+        });
+      }
       working = false;
       if (res.code === 'NO_ACTIVE_SESSION') {
         haptic('error');
@@ -1039,15 +1057,24 @@
   // while the frame's reply took ~1.6-2.6 s even then. Every action is safe to send twice
   // (repeats are recognised on the server), so a slow request also gets a normal copy and then
   // another frame copy, and the first reply wins.
-  function api(action, extra, isRetry) {
+  // firstTry: when this request was first sent (BUSY retries keep it).
+  function api(action, extra, firstTry) {
     var body = { action: action, initData: tg.initData, platform: tg.platform };
     if (extra) for (var k in extra) body[k] = extra[k];
+    var started = firstTry || Date.now();
     return exchange(body).then(function (out) {
       var res = out.res || { ok: false, code: 'NETWORK', message: 'Check your connection and try again.' };
-      // A slow or lost reply already got its extra copies above; only BUSY is worth another round.
-      if (res.code === 'BUSY' && !isRetry) {
-        if (current === 'loading') setTitle('Trying again…');
-        return sleep(TIMING.retryAfter).then(function () { return api(action, extra, true); });
+      // A slow or lost reply already got its extra copies above. BUSY means a crowd is being
+      // recorded one at a time: wait a random while (so a crowd's retries spread out) and go again,
+      // for as long as a whole crowd can take. Waiting costs the queue nothing.
+      if (res.code === 'BUSY' && Date.now() - started < TIMING.busyBudget) {
+        if (current === 'loading') {
+          setTitle('Trying again…');
+          setHint('Lots of people are checking in right now. Trying again automatically.');
+        }
+        return sleep(TIMING.retryAfter * (1 + Math.random() * 1.5)).then(function () {
+          return api(action, extra, started);
+        });
       }
       return res;
     });
@@ -1086,7 +1113,12 @@
           out.fail.via = kind + '#' + n;
           out.fail.ms = Date.now() - t0;
           failures.push(out.fail);
-          if (launched < plan.length) launch(true);
+          if (launched < plan.length) {
+            var launchedSoFar = launched; // a scheduled copy may go out meanwhile; don't add another
+            timers.push(setTimeout(function () {
+              if (launched === launchedSoFar) launch(true);
+            }, TIMING.failureGap * (0.5 + Math.random())));
+          }
           else if (!pending) finish(null, null);
         });
       }
@@ -1362,6 +1394,15 @@
     while (node.firstChild) node.removeChild(node.firstChild);
   }
 
+  // Fills the loading screen's reserved hint row.
+  function setHint(text) {
+    var hint = screenEl.querySelector('.hint');
+    if (!hint) return;
+    hint.textContent = text;
+    hint.classList.remove('placeholder');
+    hint.setAttribute('data-said', ''); // the generic "still working" line isn't added on top
+  }
+
   function setTitle(text) {
     var h = screenEl.querySelector('.title');
     if (h) h.lastChild.textContent = text;
@@ -1411,7 +1452,7 @@
     if (view.state === 'loading') {
       // Slow venue Wi-Fi, a slow GPS fix or an Apps Script cold start: say it is still working.
       setTimeout(function () {
-        if (renders !== id) return;
+        if (renders !== id || screenEl.querySelector('.hint[data-said]')) return;
         var text = view.slowHint || 'Still working. A slow connection can take a little while.';
         var empty = screenEl.querySelector('.hint.placeholder');
         if (empty) {

@@ -289,3 +289,18 @@ The owner reopened two of the decisions above. This section overrides the table 
   - *Offline:* a frame that loads without a reply counts as failed, so being offline still fails fast.
   - *Measured* against the live deployment during a slow spell: normal replies took 5.7–17 s, one was lost and one failed; frame replies took 1.6–2.6 s every time. On the owner's phone, the full start-then-check-in took 6 s, down from over a minute.
   - The diagnostics were removed afterwards. The old Perf tab can be deleted.
+- **Crowds of ~140 (2026-09-22).**
+  - *Measured.* 140 simultaneous requests to the live deployment were all accepted: median 1.6 s, 90% within 2.7 s, slowest 5.2 s.
+  - *The limit is the lock.* Check-ins still queue for the script lock, about 0.5–0.8 s each, so roughly 1–2 per second.
+  - *Changes that shorten and smooth the queue:*
+    - A repeat check-in (a second tap, or the app's backup copy) is answered from the check-in copy without taking the lock.
+    - A check-in writes only its Log row. `checkin_count` is refreshed by the close job every 5 minutes, and finally at close.
+    - The Mini App retries BUSY up to 4 times, after random 2–5 s waits, and shows "Lots of people are checking in right now".
+    - Backup copies go out at 8 s and 15 s. After a failed copy, the next follows after a random ~1 s instead of at once, so copies don't pile onto a queue.
+  - *Adversarial review of the crowd changes.* A discrete-event model of 140 simultaneous check-ins found four problems:
+    - **Retries gave up too early.** Four BUSY retries cover about 75 s, but the queue takes about 100 s, so about 20% saw a failure screen. The app now retries BUSY for up to 150 s of elapsed time; in the model, 0–1% see a failure screen.
+    - **Name and group saves shared the check-in lock.** At a first session this doubled the wait. `saveProfile` now uses the owner's user lock (`withProfileLock_`). The web app runs as its owner, so every request shares that one lock, but it is separate from the check-in lock. Check-ins only append rows, so a save can safely update today's Log row without the check-in lock.
+    - **A final BUSY could be wrong.** One of the queued copies may have recorded the person. Before showing "Not checked in", the app now asks `status`, which doesn't queue.
+    - **A timer race** could send an extra backup copy.
+
+    Modelled result: half the crowd is in within about a minute, and the last person within about 100–120 s.

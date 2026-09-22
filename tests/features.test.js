@@ -856,12 +856,15 @@ test('speed: a repeat check-in is answered from the copy; a first one is still c
 test('cache: an error after the row is written can\'t lead to a second row on retry', () => {
   const env = setup();
   env.start(ADMIN);
-  const sessions = env.sheet('Sessions');
-  const realGetRange = sessions.getRange.bind(sessions);
-  let failOnce = true;
-  sessions.getRange = (row, col, ...rest) => {
-    if (col === 8 && row > 1 && failOnce) { failOnce = false; throw new Error('Service Spreadsheets timed out while accessing document'); }
-    return realGetRange(row, col, ...rest);
+  const sheets = env.context.SpreadsheetApp;
+  const realFlush = sheets.flush;
+  let failNext = false;
+  const log = env.sheet('Log');
+  const realAppend = log.appendRow.bind(log);
+  log.appendRow = (row) => { realAppend(row); failNext = true; }; // the row lands, then the commit reports an error
+  sheets.flush = () => {
+    if (failNext) { failNext = false; throw new Error('Service Spreadsheets timed out while accessing document'); }
+    return realFlush();
   };
   assert.equal(env.checkin(MEMBER).code, 'SERVER_ERROR');
   assert.equal(env.rows('Log').length, 1, 'the row did land');
@@ -1000,3 +1003,74 @@ test('frame: names can\'t break out of the reply script', () => {
   const msg = frameMessage(out);
   assert.equal(msg.data.res.data.profile.group, '</script><script>alert(1)</script>');
 });
+
+// ---------- bursts (140 people at once) ----------
+
+const lockEvents = (env) => env.events.filter((e) => e.type === 'tryLock').length;
+
+test('burst: a repeat check-in is answered without queueing for the lock', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.events.length = 0;
+  const again = env.checkin(MEMBER);
+  assert.equal(again.code, 'ALREADY_CHECKED_IN');
+  assert.equal(again.data.atText, '10:30');
+  assert.equal(lockEvents(env), 0);
+  env.lockHeldElsewhere = true; // even while everyone else is queueing
+  assert.equal(env.checkin(MEMBER).code, 'ALREADY_CHECKED_IN');
+});
+
+test('burst: a check-in writes one row and nothing else to the Sheet', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER2); // warm the copies
+  env.events.length = 0;
+  env.checkin(MEMBER);
+  const writes = env.events.filter((e) => e.type === 'write');
+  assert.ok(writes.length > 0 && writes.every((w) => w.sheet === 'Log'), JSON.stringify(writes.map((w) => w.sheet)));
+});
+
+test('burst: the close job keeps checkin_count current while a session is open', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.checkin(MEMBER2);
+  assert.equal(env.rows('Sessions')[0][7], 0, 'not written by each check-in');
+  env.setNow(T0 + 5 * MIN);
+  env.call('closeExpiredSessions');
+  assert.equal(env.rows('Sessions')[0][6], 'open');
+  assert.equal(env.rows('Sessions')[0][7], 2);
+});
+
+test('burst: a stale copy can\'t answer for a session that has ended', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.setNow(T0 + 61 * MIN);
+  assert.equal(env.checkin(MEMBER).code, 'NO_ACTIVE_SESSION');
+});
+
+test('burst: saving a name and group never queues behind check-ins', () => {
+  const env = setup({ groups: ['Alpha', 'Bravo'] });
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.lockHeldElsewhere = true; // a crowd is holding the check-in lock
+  env.events.length = 0;
+  const saved = env.saveProfile(MEMBER, 'Cy Tan', 'Bravo');
+  assert.equal(saved.code, 'PROFILE_SAVED');
+  assert.equal(env.events.filter((e) => e.type === 'tryLock').length, 0, 'not the check-in lock');
+  assert.equal(env.events.filter((e) => e.type === 'tryUserLock').length, 1);
+  assert.deepEqual(env.rows('Log')[0].slice(11, 13), ['Cy Tan', 'Bravo'], 'today\'s row still gets the details');
+  env.userLockHeldElsewhere = true;
+  assert.equal(env.saveProfile(MEMBER, 'Cy Tan', 'Alpha').code, 'BUSY', 'saves still take turns among themselves');
+});
+
+test('burst: a profile save never writes the sessions copy (only the check-in lock holder may)', () => {
+  const env = setup({ groups: ['Alpha'] });
+  env.start(ADMIN);
+  env.cache.delete('sessions:current');
+  env.saveProfile(MEMBER, 'Cy Tan', 'Alpha');
+  assert.equal(env.cache.has('sessions:current'), false);
+});
+

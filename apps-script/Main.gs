@@ -124,6 +124,22 @@ function withScriptLock_(fn) {
 }
 
 /**
+ * Like withScriptLock_, for saving names and groups. It uses a different lock (the owner's user
+ * lock; the web app runs as its owner, so every request shares it), so saves never queue behind
+ * check-ins when a crowd arrives, while saves still take turns among themselves.
+ */
+function withProfileLock_(fn) {
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(LOCK_WAIT_MS_)) return null;
+  try {
+    return fn();
+  } finally {
+    SpreadsheetApp.flush();
+    lock.releaseLock();
+  }
+}
+
+/**
  * User-supplied text for a cell. The leading apostrophe stops Sheets from treating it as a
  * formula or number. Formula-like text keeps a second, visible apostrophe so it stays inert
  * in a CSV export too.

@@ -88,11 +88,12 @@
     }
 
     var e = sc.expect;
-    if (!errors.length && !(await until(function () { return state() === e.state; }, 8000))) {
+    // Scenarios that wait out retries can ask for longer (a hidden pane also slows timers).
+    if (!errors.length && !(await until(function () { return state() === e.state; }, e.waitMs || 8000))) {
       errors.push('state ' + state() + ', expected ' + e.state);
     }
     await wait(150); // let any extra requests show up
-    await until(function () { return (e.text || []).every(function (t) { return text().indexOf(t) !== -1; }); }, 3000);
+    await until(function () { return (e.text || []).every(function (t) { return text().indexOf(t) !== -1; }); }, e.waitMs || 3000);
     if (!errors.length) {
       var log = win().__mini;
       (e.text || []).forEach(function (t) { if (text().indexOf(t) === -1) errors.push('text missing: ' + t); });
