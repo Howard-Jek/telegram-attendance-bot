@@ -19,7 +19,7 @@
     // Same behaviour, shorter waits, so scenarios run in seconds.
     var timing = /var TIMING = \{[\s\S]*?\};/;
     if (!timing.test(html)) throw new Error('TIMING constant not found in index.html');
-    html = html.replace(timing, 'var TIMING = { retryAfter: 150, busyBudget: 4000, request: 4000, hedgeSecond: 1200, hedgeThird: 2400, frameGrace: 300, failureGap: 100, location: 4000, telegramSilent: 300, grace: 400, browserLocation: 2000, freshFix: 1500, slowHint: 400, tapGuard: ' + (sc.tapGuard || 0) + ' };');
+    html = html.replace(timing, 'var TIMING = { retryAfter: 150, busyBudget: 4000, request: 4000, hedgeSecond: 1200, hedgeThird: 2400, frameGrace: 300, failureGap: 100, location: 4000, telegramSilent: 300, grace: 400, browserLocation: 2000, freshFix: 1500, slowHint: 400, settingsBudget: 600, tapGuard: ' + (sc.tapGuard || 0) + ' };');
     // Simulate a large system font size (Android scales CSS font sizes).
     var scale = Number(params.get('fontScale') || sc.fontScale || 1);
     if (scale !== 1) {

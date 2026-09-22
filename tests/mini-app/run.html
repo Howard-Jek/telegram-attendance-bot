@@ -201,7 +201,9 @@
       }
       if (e.oneSaveId) {
         var ids = log.calls.filter(function (c) { return c.action === 'saveSettings'; }).map(function (c) { return c.saveId; });
-        if (ids.length < 2 || ids.some(function (id) { return id !== ids[0]; })) errors.push('copies of one save carry ids ' + JSON.stringify(ids));
+        if (ids.length < 2 || !/^[A-Za-z0-9_-]{8,40}$/.test(ids[0] || '') || ids.some(function (id) { return id !== ids[0]; })) {
+          errors.push('copies of one save carry ids ' + JSON.stringify(ids));
+        }
       }
       if (e.enabled && doc().querySelector('#app button:disabled, #app input:disabled')) errors.push('controls left disabled');
       if (e.backVisible !== undefined && log.backVisible !== e.backVisible) errors.push('back button visible: ' + log.backVisible);

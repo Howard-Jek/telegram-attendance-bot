@@ -58,8 +58,8 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
    This happens within 5 minutes of closing.
 
 **Settings.** Admins can change three settings in the app with **Check-in settings**. The button
-is on the start screen, on the checked-in screen, and on the "too far" and "not precise enough"
-screens, where a wrong limit is most likely to show.
+is on the start screen, the "Check-in is open" screen, the checked-in screen, and the "too far" and
+"not precise enough" screens, where a wrong limit is most likely to show.
 
 - **How long check-in stays open**, 1–720 minutes. This applies from the next session.
 - **How close members must be**, 10–5000 m. This applies straight away, including to a

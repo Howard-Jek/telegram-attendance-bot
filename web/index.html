@@ -199,7 +199,7 @@
   }
   .input:focus { outline: 2px solid var(--accent-ink); outline-offset: 1px; border-color: var(--accent-ink); }
   .input[aria-invalid="true"] { border-color: var(--danger-ink); }
-  .picker-q { margin: 0; font-size: var(--t-body); font-weight: 700; } /* one style for both questions */
+  .picker-q { margin: 0; font-size: var(--t-body); font-weight: 700; text-wrap: balance; } /* one style for every question */
   .picker-q:focus { outline: none; }
   .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--s3); }
   .choice:last-child:nth-child(odd) { grid-column: 1 / -1; } /* no lone half-width button in the last row */
@@ -247,11 +247,12 @@
   .input::placeholder { color: var(--muted); opacity: 1; }
   /* Check-in settings (admins): a short number field with its unit beside it. */
   .unit-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--s3); row-gap: var(--s1); }
-  .unit-row .input { width: 7.5rem; font-variant-numeric: tabular-nums; }
+  .unit-row .input { width: 5.5rem; font-variant-numeric: tabular-nums; } /* four digits at most */
   .unit { font-weight: 400; }
   .input:disabled { opacity: 0.55; -webkit-text-fill-color: currentColor; } /* while saving: the same dimming as buttons */
   .field-help { margin: 0; font-size: var(--t-label); color: var(--muted); text-wrap: pretty; }
-  .settings .input { scroll-margin-bottom: 10rem; } /* a focused field clears the sticky buttons */
+  .settings .input { scroll-margin-bottom: 11rem; } /* a focused field clears the sticky buttons */
+  .settings #set-accuracy { scroll-margin-bottom: 15rem; } /* and the last one its help text too */
   /* The saved group and name, tappable to change. */
   .tag {
     appearance: none;
@@ -287,8 +288,17 @@
     background: var(--bg);
   }
   .actions:empty { padding: 0 0 var(--s4); }
-  /* A hairline when content runs on under the bar, so a cut-off field reads as "scroll for more". */
-  .actions.is-covering { box-shadow: 0 -1px 0 color-mix(in srgb, var(--muted) 45%, transparent), 0 -14px 14px -14px color-mix(in srgb, var(--text) 30%, transparent); }
+  /* When content runs on under the bar, it fades out above it, so a cut-off field reads as "scroll for more". */
+  .actions.is-covering::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    height: var(--s6);
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 0%, transparent), var(--bg));
+    pointer-events: none;
+  }
   body[data-state="settings"] .actions { padding-top: var(--s3); }
   @media (max-height: 620px) {
     .app { padding-top: var(--s3); }
@@ -298,7 +308,7 @@
     .mark[data-tone="no"] { width: 96px; height: 96px; }
     .mark[data-tone="no"] svg { width: 40px; height: 40px; }
     .stamp.is-compact { font-size: calc(var(--t-stamp-compact) * 0.85); }
-    body[data-state="settings"] .mark { display: none; } /* a short phone: the fields matter more */
+    body[data-state="settings"] .app { padding-top: var(--s4); } /* no mark there: keep the title off the header */
   }
   .btn {
     appearance: none;
@@ -346,7 +356,8 @@
     <h1 class="title">Checking…</h1>
     <noscript><p class="line">This page needs JavaScript. Open it from Telegram on your phone.</p></noscript>
   </section>
-  <div class="actions" id="actions"></div>
+  <!-- Sticky: content scrolls under it on purpose (see markCovered), so overlaps with it are intended. -->
+  <div class="actions" id="actions" data-allow-overlap></div>
 </main>
 <script>
 (function () {
@@ -371,6 +382,7 @@
     freshFix: 8000,        // the admin's fresh fix for the check-in point, before using Telegram's
     slowHint: 8000,
     tapGuard: 350,         // taps on a screen's buttons this soon after it appears are the second half of a double tap
+    settingsBudget: 30000, // a settings save stops retrying BUSY sooner: the admin is waiting on a form
   };
   var PHONE_PLATFORMS = ['android', 'ios'];
   var APPROXIMATE_M = 1000; // accuracy this coarse means the phone shares an approximate location
@@ -404,6 +416,7 @@
   var settingsErrors = {};  // field -> message
   var settingsNotice = '';
   var savingSettings = false;
+  var settingsNoMark = false; // decided when the form opens, so the keyboard can't reflow it
   var onBack = null;        // what Telegram's back button does on this screen (null: hidden)
   var renderedAt = 0;
   var lastDistanceM = 0;   // the admin's distance from the point, for the Move confirmation
@@ -466,15 +479,17 @@
     adminIdle: function () {
       var mins = (status && status.sessionMinutes) || 60;
       var idle = function () { render(views.adminIdle()); };
+      var warning = 'Once started, a check-in can’t be ended early.';
+      var saved = takeSaved();
       return { state: 'admin-idle', icon: 'flag', title: 'No check-in open',
         line: 'Start one where you’re standing. Members within ' + radiusText() + ' of you can check in for the next ' + mins + ' minutes.',
-        hint: takeSaved() || 'Once started, a check-in can’t be ended early.',
+        hint: saved ? saved + ' ' + warning : warning,
         actions: withSettings([{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }], idle, idle) };
     },
     // Admins only: how long check-ins stay open, how close members must be, and how precise.
     settings: function () {
       var open = !!(status && status.activeSession);
-      return { state: 'settings', icon: 'sliders', smallMark: true, title: 'Check-in settings',
+      return { state: 'settings', icon: 'sliders', smallMark: true, noMark: settingsNoMark, title: 'Check-in settings',
         line: open
           ? 'Distance and accuracy apply straight away. The time applies from the next check-in.'
           : 'These apply to every check-in, whichever admin starts it.',
@@ -503,7 +518,10 @@
         line: line || 'Tap Check in when you’re at the venue.',
         meta: line && s ? 'Open until ' + s.closesAtText : sessionMeta(), // the line already names the starter
         hint: takeSaved() };
-      view.actions = withSettings([{ label: 'Check in', primary: true, onClick: checkIn }], function () { render(view); });
+      view.actions = withSettings([{ label: 'Check in', primary: true, onClick: checkIn }], function () {
+        view.hint = ''; // "Saved" is said once
+        render(view);
+      });
       return view;
     },
     // After the stamp: the group picker (first time, or on Change), else the saved group as a pill.
@@ -570,7 +588,8 @@
           '). Turn on Precise Location for Telegram in your phone’s settings, then try again.';
       } else if (res.code === 'LOW_ACCURACY' && d.accuracyM && d.maxAccuracyM) {
         line = 'Accuracy ±' + metres(d.accuracyM) + ' (needs ±' + metres(d.maxAccuracyM) + '). Move outdoors or near a window, then try again.';
-        if (admin && canChangeSettings()) line += ' If everyone here gets this, raise the accuracy limit in Check-in settings.';
+        // Only when raising the limit could help: the app allows up to 500 m.
+        if (admin && canChangeSettings() && d.accuracyM <= SETTINGS[2].max) line += ' If everyone here gets this, raise the accuracy limit in Check-in settings.';
       } else if (res.code === 'OUT_OF_RANGE' && admin && d.distanceM) {
         // An admin may just not have arrived yet, so Try again stays first; but if the check-in was
         // started in the wrong place, they can move it from here.
@@ -1106,14 +1125,15 @@
   // The same ranges the server accepts (Settings.gs); it checks them again.
   var SETTINGS = [
     { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long a check-in stays open', unit: 'minutes' },
-    { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be', unit: 'm from the check-in point' },
+    { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be to the check\u2011in point', unit: 'm' }, // "check-in" never splits
     { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location must be accurate to within', unit: 'm',
       help: 'A higher number lets more phones through. Raise it if members indoors are told their location isn’t precise enough.' },
   ];
 
-  // An older server sends no maxAccuracyM and has no settings to save.
+  // An older server sends no maxAccuracyM and has no settings to save. (A bad value in the Sheet
+  // arrives as null: the form is then the way to fix it.)
   function canChangeSettings() {
-    return !!(status && status.isAdmin === true && typeof status.maxAccuracyM === 'number');
+    return !!(status && status.isAdmin === true && 'maxAccuracyM' in status);
   }
 
   // Adds "Check-in settings" (last) to an admin's actions. cancel re-shows this screen; after a
@@ -1143,6 +1163,7 @@
     settingsErrors = {};
     settingsNotice = '';
     settingsStale = false;
+    settingsNoMark = window.innerHeight < 700; // a phone this short needs the room for the fields
     render(views.settings());
     focusFirst('#screen .title'); // start at the top of the form, not on Save below it
   }
@@ -1219,6 +1240,21 @@
     return box;
   }
 
+  // Says what changed, in terms of the screen it appears on: an open check-in keeps its closing time.
+  function savedLine(sent, now) {
+    var keep = function (text) { return text.replace(/ /g, '\u00a0'); }; // "300 m" never splits
+    var m = function (n) { return keep(n.toLocaleString('en-US') + ' m'); }; // exactly as typed, not rounded to km
+    var parts = [];
+    if (sent.radiusM !== undefined) parts.push('Members can now check in within ' + m(now.radiusM) + '.');
+    if (sent.maxAccuracyM !== undefined) parts.push('Locations now need to be accurate to within ' + m(now.maxAccuracyM) + '.');
+    if (sent.sessionMinutes !== undefined) {
+      var s = status.activeSession;
+      parts.push(s ? 'This check-in still closes at ' + s.closesAtText + '; the next one will stay open ' + keep(now.sessionMinutes + ' minutes') + '.'
+        : 'Check-ins now stay open ' + keep(now.sessionMinutes + ' minutes') + '.');
+    }
+    return 'Saved. ' + parts.join(' ');
+  }
+
   function wholeNumber(text) {
     var t = String(text).replace(/\s+/g, '');
     return /^\d{1,5}$/.test(t) ? Number(t) : NaN;
@@ -1233,8 +1269,9 @@
     settingsErrors = {};
     settingsNotice = '';
     SETTINGS.forEach(function (f) {
-      if (String(settingsDraft[f.name]).trim() === settingsFrom[f.name]) return;
       var v = wholeNumber(settingsDraft[f.name]);
+      var from = settingsFrom[f.name];
+      if (from === '' ? String(settingsDraft[f.name]).trim() === '' : v === Number(from)) return; // unchanged ("0150" is 150)
       if (!(v >= f.min && v <= f.max)) settingsErrors[f.name] = 'Enter a whole number from ' + f.min + ' to ' + f.max + '.';
       values[f.name] = v;
       changed++;
@@ -1255,32 +1292,38 @@
     spin.setAttribute('aria-hidden', 'true');
     button.appendChild(spin);
     statusEl.textContent = 'Saving…';
+    setBack(null); // hidden, not dead, while it can't be used
     var id = renders;
     setTimeout(function () {
-      if (savingSettings && renders === id) statusEl.textContent = 'Still saving. A slow connection can take a little while.';
+      if (!savingSettings || renders !== id) return;
+      var text = 'Still saving. If lots of people are checking in, this can take up to half a minute.';
+      var wait = el('p', 'field-help', text);
+      wait.id = 'settings-wait';
+      var form = screenEl.querySelector('.settings');
+      if (form) form.insertBefore(wait, form.firstChild);
+      statusEl.textContent = text;
     }, TIMING.slowHint);
     // One id per save, shared by the app's backup copies of it, so a late copy can't undo a newer save.
     values.saveId = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-    api('saveSettings', values).then(function (res) {
+    var sent = values;
+    api('saveSettings', values, 0, TIMING.settingsBudget).then(function (res) {
       savingSettings = false;
       if (res.code === 'SETTINGS_SAVED') {
         haptic('success');
         SETTINGS.forEach(function (f) { status[f.name] = res.data[f.name]; });
-        var keep = function (text) { return text.replace(/ /g, '\u00a0'); }; // "±100 m" never splits
-        // Tied to what the next screen shows: an open check-in keeps its closing time.
-        justSaved = status.activeSession
-          ? 'Settings saved. Distance and accuracy apply now; the next check-in will stay open ' + keep(res.data.sessionMinutes + ' minutes') + '.'
-          : 'Settings saved. Locations must be accurate to within ' + keep('±' + metres(res.data.maxAccuracyM)) + '.';
+        justSaved = savedLine(sent, res.data);
         closeSettings(true);
         focusFirst('#screen .title'); // the Save button focus went with the old screen
         return;
       }
       haptic('error');
       if (res.code === 'AUTH_FAILED' || res.code === 'AUTH_EXPIRED') return render(views.auth(res, ''));
-      if (res.code === 'NETWORK' || res.code === 'NOT_ADMIN') settingsStale = true;
+      // The save may still have happened (a queued copy, or part of a failed write), or the admin
+      // was demoted: Cancel then reloads instead of showing the numbers from before.
+      if (['NETWORK', 'BUSY', 'SERVER_ERROR', 'NOT_ADMIN'].indexOf(res.code) !== -1) settingsStale = true;
       if (res.code === 'INVALID_SETTINGS' && res.data && res.data.errors && Object.keys(res.data.errors).length) settingsErrors = res.data.errors;
       else if (res.code === 'NETWORK') settingsNotice = 'Couldn’t confirm the save. Check your connection and try again.';
-      else if (res.code === 'BUSY') settingsNotice = 'Busy right now. Try again in a moment.';
+      else if (res.code === 'BUSY') settingsNotice = 'Busy right now: lots of people are checking in. Try again in a moment.';
       else settingsNotice = res.message;
       render(views.settings());
       var first = SETTINGS.filter(function (f) { return settingsErrors[f.name]; })[0];
@@ -1296,8 +1339,9 @@
   // while the frame's reply took ~1.6-2.6 s even then. Every action is safe to send twice
   // (repeats are recognised on the server), so a slow request also gets a normal copy and then
   // another frame copy, and the first reply wins.
-  // firstTry: when this request was first sent (BUSY retries keep it).
-  function api(action, extra, firstTry) {
+  // firstTry: when this request was first sent (BUSY retries keep it). budget: how long to keep
+  // retrying BUSY (default TIMING.busyBudget).
+  function api(action, extra, firstTry, budget) {
     var body = { action: action, initData: tg.initData, platform: tg.platform };
     if (extra) for (var k in extra) body[k] = extra[k];
     var started = firstTry || Date.now();
@@ -1306,13 +1350,13 @@
       // A slow or lost reply already got its extra copies above. BUSY means a crowd is being
       // recorded one at a time: wait a random while (so a crowd's retries spread out) and go again,
       // for as long as a whole crowd can take. Waiting costs the queue nothing.
-      if (res.code === 'BUSY' && Date.now() - started < TIMING.busyBudget) {
+      if (res.code === 'BUSY' && Date.now() - started < (budget || TIMING.busyBudget)) {
         if (current === 'loading') {
           setTitle('Trying again…');
           setHint('Lots of people are checking in right now. Trying again automatically.');
         }
         return sleep(TIMING.retryAfter * (1 + Math.random() * 1.5)).then(function () {
-          return api(action, extra, started);
+          return api(action, extra, started, budget);
         });
       }
       return res;
@@ -1665,7 +1709,8 @@
     current = view.state;
     document.body.setAttribute('data-state', view.state);
     clear(screenEl);
-    screenEl.appendChild(view.stamp ? stampEl(view.stamp, view.stampIsNew, view.stampCompact) : markEl(view));
+    if (view.stamp) screenEl.appendChild(stampEl(view.stamp, view.stampIsNew, view.stampCompact));
+    else if (!view.noMark) screenEl.appendChild(markEl(view));
     if (view.outcome) {
       var outcome = el('p', 'outcome' + (view.outcomeUnknown ? ' is-unknown' : ''), view.outcome);
       outcome.setAttribute('aria-hidden', 'true'); // announced through the title
