@@ -73,7 +73,6 @@ function setup({ statuses = {}, config = {}, telegram = {}, groups = [], props =
       ...telegram,
     },
   });
-  env.eval('PERF_ON_ = false'); // the temporary Perf tab would count as Sheet opens in the speed tests
   env.chat = chat;
   env.deletedIds = [];
   /** Messages still visible in a chat (default: the group). */

@@ -342,8 +342,8 @@
   var TIMING = {
     retryAfter: 2000,      // one automatic retry on BUSY
     request: 25000,        // per request, all copies included (Google drops uncollected replies after ~25 s)
-    hedgeSecond: 2500,     // no reply yet: a second copy the normal way
-    hedgeThird: 8000,      // still nothing: a third copy through the frame
+    hedgeSecond: 5000,     // no reply yet: a second copy the normal way (a frame reply takes ~3-4.5 s on a phone)
+    hedgeThird: 12000,     // still nothing: a third copy through the frame
     frameGrace: 2000,      // a hidden frame that loaded this long ago without a reply has failed
     location: 60000,       // includes the time someone takes to answer a permission prompt
     telegramSilent: 10000, // iOS never answers when Telegram itself lacks location permission
@@ -741,10 +741,7 @@
     flow = purpose;
     render(views.loading('Getting your location…', 'If Telegram asks, allow location access.',
       'Still looking for your location. Check that Location is on.'));
-    var started = Date.now();
     (purpose === 'checkin' ? getLocation() : freshLocation()).then(function (fix) {
-      clientMs['location.' + purpose] = Date.now() - started;
-      clientMs.locationSource = fix.source + (fix.fallback ? '-fallback' : '');
       denials = 0;
       onFix(fix);
     }, function (err) {
@@ -806,7 +803,6 @@
     var fromOpenCheckIn = tg.initDataUnsafe && tg.initDataUnsafe.start_param === 'open';
     if (!fromOpenCheckIn || !lm || !tg.isVersionAtLeast || !tg.isVersionAtLeast('8.0')) return null;
     var early = { settled: false, promise: null };
-    var started = Date.now();
     early.promise = new Promise(function (resolve) {
       function go() {
         if (!lm.isLocationAvailable || !lm.isAccessGranted) return resolve(null);
@@ -819,8 +815,6 @@
       }
     }).then(function (outcome) {
       early.settled = true;
-      clientMs['location.early'] = Date.now() - started;
-      clientMs.earlyOutcome = !outcome ? 'not started' : outcome.fix ? 'fix' : 'error:' + outcome.error.kind;
       return outcome;
     });
     return early;
@@ -1040,12 +1034,6 @@
 
   // ---------- backend ----------
 
-  // TEMPORARY diagnostics (2026-09-22): how long each step took on this phone, and any request
-  // that failed, sent along with the next request so the server can log it (Perf tab).
-  var clientMs = {};
-  var diagQueue = [];
-  var pageStart = Date.now();
-
   // Replies come back through the frame transport (frameReply_ in Main.gs) first: Apps Script's
   // normal replies pass through Google's reply cache, measured at 0.3-30 s and sometimes lost,
   // while the frame's reply took ~1.6-2.6 s even then. Every action is safe to send twice
@@ -1054,18 +1042,8 @@
   function api(action, extra, isRetry) {
     var body = { action: action, initData: tg.initData, platform: tg.platform };
     if (extra) for (var k in extra) body[k] = extra[k];
-    body.sentAt = Date.now();
-    body.attempt = isRetry ? 2 : 1;
-    clientMs.sincePageOpen = body.sentAt - pageStart;
-    body.clientMs = clientMs;
-    if (diagQueue.length) body.diag = diagQueue.splice(0, 5);
     return exchange(body).then(function (out) {
-      var key = action + (isRetry ? '#2' : '');
-      clientMs[key] = out.ms;
-      clientMs[key + '.via'] = out.via || 'none';
-      out.failures.forEach(function (f) { f.action = action; diagQueue.push(f); });
       var res = out.res || { ok: false, code: 'NETWORK', message: 'Check your connection and try again.' };
-      if (res.code === 'BUSY') diagQueue.push({ action: action, attempt: body.attempt, ms: out.ms, why: 'BUSY' });
       // A slow or lost reply already got its extra copies above; only BUSY is worth another round.
       if (res.code === 'BUSY' && !isRetry) {
         if (current === 'loading') setTitle('Trying again…');

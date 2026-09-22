@@ -24,7 +24,6 @@ const NOT_CONNECTED_TEXT_ = 'This check-in bot isn’t connected to a group yet.
 const NOT_READY_TEXT_ = 'Check-in isn’t fully set up yet: the owner needs to put the Mini App link in the Config tab (MINI_APP_LINK).';
 
 function handleWebhook_(e) {
-  perfBegin_('webhook');
   try {
     const secret = PropertiesService.getScriptProperties().getProperty('WEBHOOK_SECRET');
     const given = String(e.parameter.hook);
@@ -43,9 +42,7 @@ function handleWebhook_(e) {
   } catch (err) {
     // Still answer 200: a resend of an update that fails every time would only fail again.
     console.error('webhook: ' + redactSecrets_(err && err.stack ? err.stack : String(err)));
-    perfNote_('error', redactSecrets_(String(err && err.message)).slice(0, 300));
   }
-  perfEnd_('');
   return webhookReply_();
 }
 
@@ -60,16 +57,9 @@ function handleUpdate_(update) {
     // before remembering the update (the script cache holds only 1,000 items; flooding it would
     // push out the role cache and the rate limits).
     const isCommand = typeof msg.text === 'string' && msg.text.charAt(0) === '/';
-    if (!isCommand && !msg.migrate_to_chat_id && !msg.migrate_from_chat_id) {
-      PERF_ = null; // ordinary chat: not worth a row
-      return;
-    }
-    if (PERF_) PERF_.label = 'webhook:' + (isCommand ? msg.text.split(/\s/)[0].slice(0, 30) : 'migration');
+    if (!isCommand && !msg.migrate_to_chat_id && !msg.migrate_from_chat_id) return;
   } else if (!update.my_chat_member && !update.chat_member) {
-    PERF_ = null;
     return;
-  } else if (PERF_) {
-    PERF_.label = update.my_chat_member ? 'webhook:bot-membership' : 'webhook:member-change';
   }
   const cache = CacheService.getScriptCache();
   const seenKey = 'update:' + update.update_id;

@@ -281,3 +281,11 @@ The owner reopened two of the decisions above. This section overrides the table 
     - **The Config copy is versioned,** so a slow reader can't put back an old `GROUP_CHAT_ID`.
     - **The early GPS fix is narrower.** It runs only when the member came from the bot's button for an open session (that button's link carries `startapp=open`) and the bot already has location access. An early failure is shown once, not retried.
     - **The admin's 8 s fresh-fix cap now starts after permission is granted.** It used to include the prompt. When the phone's last known position is used, the admin is told.
+- **Replies through a frame (2026-09-22).** The slowness was in how Apps Script returns replies, not in our code.
+  - *Evidence:* temporary per-step timings from a real phone. The backend answered in 0.2–2.2 s, but replies reached the phone after 8–27 s or were lost (timeout, 404).
+  - *Cause:* ContentService replies come back through a redirect to Google's reply cache (`script.googleusercontent.com/macros/echo`). From here it took 0.3–17 s, in waves, and it drops replies not collected within about 25 s.
+  - *Fix:* the Mini App sends each request as a form into a hidden frame (`?transport=frame`). `frameReply_` answers with an HtmlService page, which Apps Script serves directly with no redirect. That page hands the JSON to the Mini App with `postMessage`, sent only to allowed origins, with the JSON escaped for `<script>`.
+  - *Backups:* a normal copy follows at 5 s and another frame copy at 12 s, or at once if a copy fails. The first reply wins, with a 25 s cap. Every action tolerates repeats: a check-in answers "already", a start answers "already open, by you" (`startedByMe`), and profile saves and moves are idempotent.
+  - *Offline:* a frame that loads without a reply counts as failed, so being offline still fails fast.
+  - *Measured* against the live deployment during a slow spell: normal replies took 5.7–17 s, one was lost and one failed; frame replies took 1.6–2.6 s every time. On the owner's phone, the full start-then-check-in took 6 s, down from over a minute.
+  - The diagnostics were removed afterwards. The old Perf tab can be deleted.
