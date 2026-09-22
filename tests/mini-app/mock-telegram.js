@@ -9,7 +9,7 @@
   var sc = window.SCENARIOS[name];
   if (!sc) throw new Error('Unknown scenario: ' + name);
   var theme = window.THEMES[params.get('theme') || 'light'];
-  var log = (window.__mini = { scenario: name, calls: [], confirmed: [], openedSettings: 0, closed: 0, nativeConfirms: 0, openedLinks: [], timeline: [] });
+  var log = (window.__mini = { scenario: name, calls: [], confirmed: [], openedSettings: 0, closed: 0, nativeConfirms: 0, openedLinks: [], timeline: [], vias: [] });
   var t0 = Date.now();
   function mark(what) { log.timeline.push({ what: what, t: Date.now() - t0 }); } // function declarations are hoisted
   // The page must never fall back to the browser's own confirm() inside Telegram.
@@ -21,6 +21,7 @@
   window.fetch = function (url, opts) {
     var body = JSON.parse(opts.body);
     log.calls.push(body);
+    log.vias.push('fetch');
     mark('sent:' + body.action);
     var q = queues[body.action] || [];
     var next = q.length > 1 ? q.shift() : q[0];
@@ -31,6 +32,30 @@
     return new Promise(function (resolve) {
       setTimeout(function () { mark('answered:' + body.action); resolve(new Response(text, { status: 200 })); }, sc.apiDelay || 60);
     });
+  };
+
+  // The frame transport: a form posted into a hidden frame, answered by postMessage.
+  HTMLFormElement.prototype.submit = function () {
+    var url = new URL(this.action);
+    if (url.searchParams.get('transport') !== 'frame') throw new Error('unexpected form submit');
+    var rid = url.searchParams.get('rid');
+    var body = JSON.parse(this.querySelector('input[name=payload]').value);
+    log.calls.push(body);
+    log.vias.push('frame');
+    mark('sent:' + body.action + ':frame');
+    var q = queues[body.action] || [];
+    var next = q.length > 1 ? q.shift() : q[0];
+    if (!next || next.pending) return; // no answer yet: the frame stays loading
+    if (next.network || next.html) {
+      // The frame loads an error page, with no message.
+      var frame = document.querySelector('iframe[name="' + this.target + '"]');
+      setTimeout(function () { frame.srcdoc = '<p>error</p>'; }, 30);
+      return;
+    }
+    setTimeout(function () {
+      mark('answered:' + body.action);
+      window.postMessage({ attendanceReply: true, rid: rid, res: next }, location.origin);
+    }, sc.frameDelay || 60);
   };
 
   // ---------- the WebView's own geolocation ----------

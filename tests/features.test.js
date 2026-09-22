@@ -974,3 +974,52 @@ test('perf: a failing Perf write never breaks the request', () => {
   env.ss.insertSheet = () => { throw new Error('quota'); };
   assert.equal(env.req('status', MEMBER).code, 'OK');
 });
+
+test('start: a repeated start by the same admin says so (the app may send a request twice)', () => {
+  const env = setup();
+  assert.equal(env.start(ADMIN).code, 'SESSION_STARTED');
+  const again = env.start(ADMIN);
+  assert.equal(again.code, 'SESSION_ACTIVE');
+  assert.equal(again.data.startedByMe, true);
+  assert.equal(env.start(ADMIN2).data.startedByMe, false);
+  assert.equal(env.visible().length, 1, 'announced once');
+});
+
+// ---------- frame transport (avoids Google's slow reply cache) ----------
+
+function frameMessage(out) {
+  const m = /^<script>window\.top\.postMessage\(([\s\S]*), ("[^"]*")\);<\/script>$/.exec(out.content);
+  return m ? { data: JSON.parse(m[1]), origin: JSON.parse(m[2]) } : null;
+}
+
+test('frame: the reply is handed to the Mini App page by postMessage, from a frameable page', () => {
+  const env = setup();
+  const out = env.postFrame({ action: 'status', initData: env.initData(MEMBER), platform: 'android' }, { rid: 'abc123' });
+  assert.equal(out.kind, 'html');
+  assert.equal(out.xframe, 'ALLOWALL');
+  const msg = frameMessage(out);
+  assert.equal(msg.origin, 'https://howard-jek.github.io');
+  assert.equal(msg.data.attendanceReply, true);
+  assert.equal(msg.data.rid, 'abc123');
+  assert.equal(msg.data.res.code, 'OK');
+});
+
+test('frame: only allowed pages get a reply; forged identities are still refused', () => {
+  const env = setup();
+  const evil = env.postFrame({ action: 'status', initData: env.initData(MEMBER), platform: 'android' }, { origin: 'https://evil.example' });
+  assert.equal(evil.content, '', 'nothing is sent to an unknown origin');
+  const forged = frameMessage(env.postFrame({ action: 'status', initData: 'user=%7B%22id%22%3A1%7D&hash=00', platform: 'android' }));
+  assert.equal(forged.data.res.code, 'AUTH_FAILED');
+});
+
+test('frame: names can\'t break out of the reply script', () => {
+  const env = setup({ groups: ['</script><script>alert(1)</script>'] });
+  const LS = String.fromCharCode(0x2028);
+  env.saveProfile(MEMBER, 'A</script><img src=x onerror=alert(1)>' + LS + 'B', '</script><script>alert(1)</script>');
+  env.start(ADMIN);
+  const out = env.postFrame({ action: 'checkin', initData: env.initData(MEMBER), platform: 'android', location: ONSITE });
+  assert.equal((out.content.match(/<\/script>/g) || []).length, 1, 'only the closing tag of our own script');
+  assert.ok(!out.content.includes(LS), 'no raw line separators inside the script');
+  const msg = frameMessage(out);
+  assert.equal(msg.data.res.data.profile.group, '</script><script>alert(1)</script>');
+});

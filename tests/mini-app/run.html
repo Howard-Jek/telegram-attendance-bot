@@ -146,6 +146,8 @@
       }
       if (e.noLocationRequest && when('location-requested') !== null) errors.push('location was requested');
       if (e.noBrowserLocation && when('browser-location') !== null) errors.push('browser geolocation was used');
+      if (e.vias && JSON.stringify(log.vias) !== JSON.stringify(e.vias)) errors.push('vias ' + JSON.stringify(log.vias));
+      if (e.viasStart && JSON.stringify(log.vias.slice(0, e.viasStart.length)) !== JSON.stringify(e.viasStart)) errors.push('vias ' + JSON.stringify(log.vias));
       if (e.locationRequests !== undefined) {
         var n = log.timeline.filter(function (x) { return x.what === 'location-requested'; }).length;
         if (n !== e.locationRequests) errors.push('location requested ' + n + ' times');

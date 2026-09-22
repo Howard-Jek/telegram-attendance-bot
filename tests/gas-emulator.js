@@ -344,9 +344,11 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
     // doPost output that Apps Script serves directly with HTTP 200 (ContentService output is
     // served through a 302 redirect instead, which Telegram's webhook delivery treats as a failure).
     HtmlService: {
+      XFrameOptionsMode: { ALLOWALL: 'ALLOWALL', DEFAULT: 'DEFAULT' },
       createHtmlOutput(content = '') {
-        const out = { kind: 'html', content: String(content) };
+        const out = { kind: 'html', content: String(content), xframe: 'DEFAULT' };
         out.getContent = () => out.content;
+        out.setXFrameOptionsMode = (m) => { out.xframe = m; return out; };
         return out;
       },
     },
@@ -410,6 +412,17 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
     }
     if (out.mimeType !== 'JSON') throw new Error(`doPost returned mime ${out.mimeType}`);
     return JSON.parse(out.getContent());
+  };
+  /** POST the way the Mini App's frame transport does: a form with payload, rid and origin. */
+  env.postFrame = (body, { rid = 'r1', origin = 'https://howard-jek.github.io' } = {}) => {
+    const wasInWebApp = env.inWebApp;
+    env.inWebApp = true;
+    try {
+      return context.doPost({ parameter: { transport: 'frame', rid, origin, payload: JSON.stringify(body) },
+        postData: { contents: 'payload=...', type: 'application/x-www-form-urlencoded' } });
+    } finally {
+      env.inWebApp = wasInWebApp;
+    }
   };
   /** Deliver a Telegram update to doPost the way the webhook does (?hook=<secret>, JSON body). */
   env.webhook = (update, hook = env.props.WEBHOOK_SECRET) => {

@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Transport race</title>
+<style>body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; } td { padding: 2px 10px; }</style>
+<h1>fetch (via Google's reply cache) vs frame (direct HtmlService)</h1>
+<p id="summary">Running…</p>
+<table id="out"><tr><th>#</th><th>fetch ms</th><th>frame ms</th></tr></table>
+<!-- Dev-only experiment. ?url=<exec url>&n=10. Alternates the two ways of getting a reply from
+     Apps Script. window.__race holds the results. -->
+<script>
+  var params = new URLSearchParams(location.search);
+  var URL_ = params.get('url');
+  var N = Number(params.get('n') || 10);
+  var LIMIT = 30000;
+
+  function viaFetch(body) {
+    var t0 = performance.now();
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, LIMIT);
+    return fetch(URL_, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), signal: ctrl.signal })
+      .then(function (r) { return r.json(); })
+      .then(function (res) { clearTimeout(timer); return { ms: Math.round(performance.now() - t0), code: res.code }; })
+      .catch(function (e) { clearTimeout(timer); return { ms: Math.round(performance.now() - t0), code: 'FAIL ' + e.name }; });
+  }
+
+  function viaFrame(body) {
+    return new Promise(function (resolve) {
+      var rid = Math.random().toString(36).slice(2);
+      var t0 = performance.now();
+      var frame = document.createElement('iframe');
+      frame.name = 'f' + rid;
+      frame.style.display = 'none';
+      document.body.appendChild(frame);
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.target = frame.name;
+      form.action = URL_ + '?transport=frame&rid=' + rid + '&origin=' + encodeURIComponent(location.origin);
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'payload';
+      input.value = JSON.stringify(body);
+      form.appendChild(input);
+      document.body.appendChild(form);
+      var done = false;
+      function finish(r) {
+        if (done) return;
+        done = true;
+        window.removeEventListener('message', onMessage);
+        frame.remove();
+        form.remove();
+        resolve(r);
+      }
+      function onMessage(ev) {
+        if (ev.data && ev.data.attendanceReply && ev.data.rid === rid) {
+          finish({ ms: Math.round(performance.now() - t0), code: ev.data.res.code, from: ev.origin });
+        }
+      }
+      window.addEventListener('message', onMessage);
+      setTimeout(function () { finish({ ms: LIMIT, code: 'FAIL timeout' }); }, LIMIT);
+      form.submit();
+    });
+  }
+
+  (async function () {
+    var rows = [];
+    var table = document.getElementById('out');
+    for (var i = 1; i <= N; i++) {
+      var body = { action: 'nope' };
+      var a = await viaFetch(body);
+      var b = await viaFrame(body);
+      rows.push({ i: i, fetch: a, frame: b });
+      var tr = table.insertRow();
+      tr.insertCell().textContent = i;
+      tr.insertCell().textContent = a.ms + ' ' + a.code;
+      tr.insertCell().textContent = b.ms + ' ' + b.code + (b.from ? ' (' + b.from + ')' : '');
+    }
+    function med(xs) { xs = xs.slice().sort(function (x, y) { return x - y; }); return xs[Math.floor(xs.length / 2)]; }
+    var f = rows.map(function (r) { return r.fetch.ms; });
+    var g = rows.map(function (r) { return r.frame.ms; });
+    window.__race = { rows: rows, fetchMedian: med(f), frameMedian: med(g), fetchMax: Math.max.apply(null, f), frameMax: Math.max.apply(null, g) };
+    document.getElementById('summary').textContent = 'fetch median ' + med(f) + ' ms (max ' + Math.max.apply(null, f) + '), frame median ' + med(g) + ' ms (max ' + Math.max.apply(null, g) + ')';
+  })();
+</script>

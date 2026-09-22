@@ -68,9 +68,11 @@ function handleStartSession_(ctx, body) {
   if (!result) return reply_(false, 'BUSY', MESSAGES_.BUSY);
   if (result.blocking) {
     const b = result.blocking;
+    const view = sessionView_(b);
+    // The Mini App may send a request twice when replies are slow; its own earlier start comes back here.
+    view.startedByMe = b.startedById === user.id;
     return reply_(false, 'SESSION_ACTIVE',
-      'A check-in is already open until ' + hhmm_(b.closesAt) + ', started by ' + b.startedByName + '.',
-      sessionView_(b));
+      'A check-in is already open until ' + hhmm_(b.closesAt) + ', started by ' + b.startedByName + '.', view);
   }
 
   // Announce in the group outside the lock: it is a network call, and a failure must not undo the session.

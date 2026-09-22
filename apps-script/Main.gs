@@ -41,10 +41,12 @@ class SetupError_ extends Error {
 function doPost(e) {
   openedSpreadsheet_ = null;
   if (e && e.parameter && e.parameter.hook !== undefined) return handleWebhook_(e);
-  perfBegin_('api');
+  // The frame transport (see frameReply_) posts a form: the request body is its payload field.
+  const viaFrame = !!(e && e.parameter && e.parameter.transport === 'frame');
+  perfBegin_(viaFrame ? 'api(frame)' : 'api');
   let res;
   try {
-    res = handleRequest_(e);
+    res = handleRequest_(viaFrame ? { postData: { contents: String(e.parameter.payload || '') } } : e);
   } catch (err) {
     console.error('doPost: ' + redactSecrets_(err && err.stack ? err.stack : String(err)));
     const isSetup = err && err.name === 'SetupError';
@@ -52,6 +54,7 @@ function doPost(e) {
     perfNote_('error', redactSecrets_(String(err && err.message)).slice(0, 300));
   }
   perfEnd_(res.code);
+  if (viaFrame) return frameReply_(res, e.parameter.rid, e.parameter.origin);
   return ContentService.createTextOutput(JSON.stringify(res)).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -85,6 +88,26 @@ function handleRequest_(e) {
 
   const ctx = { cfg: cfg, token: token, user: auth.user };
   return ACTIONS_[action](ctx, body);
+}
+
+// Pages allowed to receive replies through the frame transport.
+const FRAME_ORIGINS_ = ['https://howard-jek.github.io', 'http://127.0.0.1:8765'];
+
+/**
+ * The frame transport's answer. ContentService replies reach the browser only through a
+ * redirect to Google's reply cache (script.googleusercontent.com), which was measured taking
+ * 0.3-10 s and discarding replies that aren't collected within ~25 s. HtmlService output is
+ * served directly, so the Mini App loads it in a hidden frame and this page hands the reply over
+ * with postMessage, addressed only to an allowed origin. The JSON is made safe inside <script>.
+ */
+function frameReply_(res, rid, origin) {
+  let html = '';
+  if (FRAME_ORIGINS_.indexOf(String(origin)) !== -1) {
+    const msg = JSON.stringify({ attendanceReply: true, rid: String(rid || '').slice(0, 40), res: res })
+      .replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    html = '<script>window.top.postMessage(' + msg + ', ' + JSON.stringify(String(origin)) + ');</script>';
+  }
+  return HtmlService.createHtmlOutput(html).setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function reply_(ok, code, message, data) {
