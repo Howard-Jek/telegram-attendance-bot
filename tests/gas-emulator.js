@@ -58,6 +58,7 @@ class MockRange {
   }
   setFontWeight() { return this; }
   createTextFinder(text) {
+    this.sheet.ss.env.events.push({ type: 'find', sheet: this.sheet.name });
     const range = this;
     const opts = { entire: false, matchCase: false };
     let cursor = -1;

@@ -259,3 +259,25 @@ The owner reopened two of the decisions above. This section overrides the table 
   - *Members get coarse distances.* An out-of-range member hears the distance rounded up to 50 m, or "more than 1 km". After 10 such answers per session they hear only "not within".
     - This stops a member from trilaterating the check-in point, which is where an admin stood (maybe at home).
     - Admins get exact figures, and the Rejected tab keeps them.
+- **Speed (2026-09-22).** Measured on the live deployment, each request cost:
+  - about 0.75 s of Apps Script start-up;
+  - about 0.6 s to open the Sheet and read Config;
+  - about 0.1–0.2 s for each further Sheet call;
+  - about 0.35 s for Google's redirect.
+
+  Opening the app therefore took two such requests with a GPS fix between them. Changes:
+  - *Copies of Sheet data (`Cache.gs`).*
+    - Config and Groups are copied for 60 s, and a member's saved profile for 10 minutes.
+    - There is a copy of the not-yet-ended sessions, and a per-session copy of who has checked in.
+    - The last two are written only under the script lock, so a slow reader can't restore an older copy.
+    - Starting a session and the session a check-in is recorded against always come from the Sheet, under the lock.
+    - A warm status call no longer opens the Sheet, and a check-in skips the Log search when the copy can answer. If the check-in copy is lost early, negative answers come from the Log again.
+    - *Trade-off:* hand edits in the Sheet show up once a copy refreshes. Config and Groups take up to a minute. Sessions take until the next close-job run, which refreshes the copy every 5 minutes. A Log row deleted by hand still counts as checked in until that session ends.
+  - *GPS during status.* If the bot already has location access, the Mini App starts the fix while status loads. It asks nothing new, so first-time visitors are never prompted when no session is open.
+  - *Admin's fresh fix.* On Android the fresh fix for the check-in point waits at most 8 s, then falls back to Telegram's fix.
+  - *Adversarial review of the speed-up (2026-09-22).* 10 findings survived verification; all are fixed, with regression tests:
+    - **Only the Log may say "not yet".** The copy of who has checked in answers repeats only. A first check-in is still confirmed in the Log before its row is written.
+    - **Copies are updated after the write is flushed.** Before this, an error just after writing the row could lead to a second row on retry. That was reproduced in the emulator, then fixed.
+    - **The Config copy is versioned,** so a slow reader can't put back an old `GROUP_CHAT_ID`.
+    - **The early GPS fix is narrower.** It runs only when the member came from the bot's button for an open session (that button's link carries `startapp=open`) and the bot already has location access. An early failure is shown once, not retried.
+    - **The admin's 8 s fresh-fix cap now starts after permission is granted.** It used to include the prompt. When the phone's last known position is used, the admin is told.

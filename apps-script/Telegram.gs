@@ -97,18 +97,24 @@ function groupRole_(token, chatId, userId) {
  */
 function adoptGroup_(cfg, fromId, toId) {
   const moved = withScriptLock_(() => {
-    if (loadConfig_().groupChatId !== String(fromId)) return false;
+    if (loadConfig_(true).groupChatId !== String(fromId)) return false;
     setConfigValue_('GROUP_CHAT_ID', String(toId));
     return true;
   });
   if (moved === null) throw new Error('Could not update GROUP_CHAT_ID: the script lock was busy.');
   if (moved) console.info('The group became a supergroup; GROUP_CHAT_ID now points to it.');
-  cfg.groupChatId = loadConfig_().groupChatId;
+  cfg.groupChatId = loadConfig_(true).groupChatId;
 }
 
-/** The inline keyboard with the one button that opens the Mini App. */
-function checkinKeyboard_(cfg) {
-  return { inline_keyboard: [[{ text: '📍 Check in', url: cfg.miniAppLink }]] };
+/**
+ * The inline keyboard with the one button that opens the Mini App. When a session is open, the
+ * link carries startapp=open, so the Mini App knows it can look up the location while it asks the
+ * server (the close job removes the button when the session ends). An owner's own startapp stays.
+ */
+function checkinKeyboard_(cfg, sessionOpen) {
+  let url = cfg.miniAppLink;
+  if (sessionOpen && url.indexOf('?') === -1) url += '?startapp=open';
+  return { inline_keyboard: [[{ text: '📍 Check in', url: url }]] };
 }
 
 /** Sends plain text (no parse_mode, so names and group names need no escaping). */

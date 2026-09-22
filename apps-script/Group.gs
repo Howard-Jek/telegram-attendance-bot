@@ -17,7 +17,7 @@ const ANNOUNCE_WINDOW_MS_ = 60 * 60 * 1000; // sessions that ended longer ago ar
 function postLiveMessage_(ctx, text, sessionId) {
   const cfg = ctx.cfg;
   if (!CONFIG_CHECKS_.MINI_APP_LINK(cfg)) return { ok: false, description: 'MINI_APP_LINK is not set in Config' };
-  const sent = sendText_(ctx.token, cfg.groupChatId, text, checkinKeyboard_(cfg));
+  const sent = sendText_(ctx.token, cfg.groupChatId, text, checkinKeyboard_(cfg, !!sessionId));
   if (!sent.ok) {
     console.warn('sendMessage to the group failed: ' + sent.error_code + ' ' + sent.description);
     return { ok: false, description: describeSendError_(sent) };
@@ -78,7 +78,9 @@ function closeExpiredSessions_() {
   const cfg = loadConfig_();
   const now = now_();
   const done = withScriptLock_(() => {
-    const due = readSessions_().filter((s) => s.status === 'open' && s.closesAt.getTime() <= now.getTime());
+    const sessions = readSessions_();
+    cacheSessions_(sessions, now.getTime()); // every run refreshes the copy, picking up hand edits
+    const due = sessions.filter((s) => s.status === 'open' && s.closesAt.getTime() <= now.getTime());
     if (!due.length) return { closed: [] };
     const tally = tallyLog_(due.map((s) => s.id));
     const sheet = sheet_(SHEETS_.SESSIONS);

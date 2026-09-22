@@ -38,13 +38,20 @@ function handleCheckin_(ctx, body) {
   const result = withScriptLock_(() => {
     const now = now_();
 
-    // 5. Active session by server time.
-    const session = findActiveSession_(readSessions_(), now.getTime());
+    // 5. Active session by server time, read from the Sheet (and the copy refreshed while we hold the lock).
+    const sessions = readSessions_();
+    cacheSessions_(sessions, now.getTime());
+    const session = findActiveSession_(sessions, now.getTime());
     if (!session) return reply_(false, 'NO_ACTIVE_SESSION', MESSAGES_.NO_ACTIVE_SESSION);
 
-    // 6. One accepted check-in per person per session. Duplicates write nothing.
+    // 6. One accepted check-in per person per session. Duplicates write nothing. The copy of who
+    // has checked in may answer a repeat, but only the Log may say "not yet": it decides every write.
     const key = dedupeKey_(session.id, user.id);
-    const prior = findCheckin_(key);
+    let prior = knownCheckin_(session, user.id);
+    if (!prior) {
+      prior = findCheckin_(key); // also checks the Log's header before step 9 writes by position
+      if (prior) rememberCheckin_(session, user.id, prior.at, now);
+    }
     if (prior) {
       return reply_(true, 'ALREADY_CHECKED_IN', 'You already checked in at ' + hhmm_(prior.at) + '.',
         Object.assign(checkinView_(session, prior.at), profile));
@@ -77,6 +84,8 @@ function handleCheckin_(ctx, body) {
       textCell_(user.lastName), textCell_(user.username), loc.lat, loc.lng, round1_(loc.accuracy),
       round1_(distance), key, textCell_(p ? p.fullName : ''), groupCell_(p ? p.group : '')]);
     sheet_(SHEETS_.SESSIONS).getRange(session.row, SESSION_COL_.COUNT).setValue(session.count + 1);
+    SpreadsheetApp.flush(); // the copy may only say "checked in" once the row is really there
+    rememberCheckin_(session, user.id, now, now);
     return reply_(true, 'CHECKED_IN', 'Checked in at ' + hhmm_(now) + '.',
       Object.assign(checkinView_(session, now), profile));
   });

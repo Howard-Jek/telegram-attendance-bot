@@ -617,8 +617,9 @@ test('Log tab with a column inserted fails closed (no duplicate check-in)', () =
   env.start(ADMIN);
   env.checkin(MEMBER);
   insertColumn(env.sheet('Log'), 4, 'remarks');
-  const res = env.checkin(MEMBER);
-  assert.equal(res.code, 'SERVER_ERROR');
+  assert.ok(['ALREADY_CHECKED_IN', 'SERVER_ERROR'].includes(env.checkin(MEMBER).code), 'the repeat writes nothing');
+  const res = env.checkin(MEMBER2);
+  assert.equal(res.code, 'SERVER_ERROR', 'a new row would land in the wrong columns');
   assert.match(res.message, /Log/);
   assert.equal(env.rows('Log').length, 1);
 });

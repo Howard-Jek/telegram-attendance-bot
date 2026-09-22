@@ -58,12 +58,21 @@ const CONFIG_CHECKS_ = {
   MINI_APP_LINK: (c) => /^https:\/\/t\.me\/[A-Za-z0-9_]+(\/[A-Za-z0-9_]+)?\/?(\?[^\s]*)?$/.test(c.miniAppLink),
 };
 
-function loadConfig_() {
-  const raw = {};
-  sheet_(SHEETS_.CONFIG).getDataRange().getValues().forEach((row) => {
-    const key = String(row[0]).trim();
-    if (key) raw[key] = row[1];
-  });
+/**
+ * The Config tab, from a copy up to a minute old (see Cache.gs). Pass fresh=true where a
+ * decision must see the Sheet as it is now (e.g. under the lock before writing GROUP_CHAT_ID).
+ */
+function loadConfig_(fresh) {
+  const cacheKey = configCacheKey_(); // read before the Sheet, so a concurrent change can't be masked
+  let raw = fresh ? null : cacheGetJson_(cacheKey);
+  if (!raw || typeof raw !== 'object') {
+    raw = {};
+    sheet_(SHEETS_.CONFIG).getDataRange().getValues().forEach((row) => {
+      const key = String(row[0]).trim();
+      if (key) raw[key] = row[1];
+    });
+    cachePutJson_(cacheKey, raw, CACHE_SEC_.CONFIG);
+  }
   const val = (key) => (isBlank_(raw[key]) ? CONFIG_DEFAULTS_[key] : raw[key]);
   return {
     radiusM: toNumber_(val('RADIUS_M')),
@@ -109,6 +118,8 @@ function setConfigValue_(key, value) {
     row = sheet.getLastRow();
   }
   sheet.getRange(row, 2).setNumberFormat('@').setValue(String(value));
+  SpreadsheetApp.flush();
+  bumpConfigCache_();
 }
 
 function isBlank_(v) {

@@ -346,6 +346,7 @@
     telegramSilent: 10000, // iOS never answers when Telegram itself lacks location permission
     grace: 5000,           // how long a late Telegram answer may still win after that
     browserLocation: 20000,
+    freshFix: 8000,        // the admin's fresh fix for the check-in point, before using Telegram's
     slowHint: 8000,
   };
   var PHONE_PLATFORMS = ['android', 'ios'];
@@ -436,7 +437,7 @@
         hint: 'Once started, a check-in can’t be ended early.',
         actions: [{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }] };
     },
-    adminStarted: function (data) {
+    adminStarted: function (data, pointFromLastKnown) {
       // Admins are not checked in automatically, so their own status must not read as done. If the
       // group announcement failed, nobody knows the check-in is open, so sharing the link comes first.
       var checkInAction = { label: 'Check in', primary: true, onClick: checkIn };
@@ -447,7 +448,8 @@
       }
       return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
         line: 'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
-        meta: 'Open until ' + data.closesAtText, notice: data.warning, actions: actions };
+        meta: 'Open until ' + data.closesAtText, notice: data.warning, actions: actions,
+        hint: pointFromLastKnown ? 'Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.' : '' };
     },
     ready: function (line) {
       var s = status && status.activeSession;
@@ -636,6 +638,9 @@
 
   function loadStatus(autoCheckIn, readyLine) {
     render(views.loading('Checking…'));
+    // Arriving from the bot's button for an open check-in, someone who already allowed location
+    // gets their fix while the server answers, instead of after it.
+    var early = autoCheckIn ? earlyLocation() : null;
     return api('status').then(function (res) {
       if (!res.ok) return fail(res, function () { loadStatus(autoCheckIn, readyLine); }, '');
       status = res.data;
@@ -646,7 +651,7 @@
         return render(views.checkedIn(status.myCheckin.atText, s.closesAtText, false));
       }
       // The group tap should be the only tap: try straight away.
-      if (autoCheckIn) return checkIn();
+      if (autoCheckIn) return checkInWith(early);
       render(views.ready(readyLine));
     });
   }
@@ -675,7 +680,7 @@
           haptic('success');
           status.activeSession = res.data;
           // data.warning explains e.g. that the group announcement could not be sent.
-          return render(views.adminStarted(res.data));
+          return render(views.adminStarted(res.data, fix.fallback));
         }
         if (res.code === 'SESSION_ACTIVE') {
           // Another admin got there first: say so, and that this admin is not checked in yet.
@@ -754,6 +759,61 @@
     if (working) return;
     working = true;
     locate('checkin', function (fix) { submit(fix, false); });
+  }
+
+  // early: from earlyLocation(), or null. Its outcome is used as is: a fix is submitted, and a
+  // location problem is shown straight away rather than asked for a second time.
+  function checkInWith(early) {
+    if (!early) return checkIn();
+    if (working) return;
+    working = true;
+    flow = 'checkin';
+    if (!early.settled) {
+      render(views.loading('Getting your location…', 'If Telegram asks, allow location access.',
+        'Still looking for your location. Check that Location is on.'));
+    }
+    early.promise.then(function (outcome) {
+      if (!outcome) {
+        working = false;
+        return checkIn(); // it never started (e.g. access not allowed yet): ask the usual way
+      }
+      if (outcome.fix) {
+        denials = 0;
+        return submit(outcome.fix, false);
+      }
+      working = false;
+      haptic('error');
+      if (outcome.error.kind === 'denied') {
+        denials++;
+        return render(views.locationDenied(outcome.error.where));
+      }
+      render(views.locationError(outcome.error.kind));
+    });
+  }
+
+  // Starts the location request early only when it is very likely needed and can't surprise
+  // anyone: the member came from the bot's button for an open check-in (startapp=open) and this
+  // bot already has location access. Resolves {fix}, {error} or null (not started).
+  function earlyLocation() {
+    var lm = tg.LocationManager;
+    var fromOpenCheckIn = tg.initDataUnsafe && tg.initDataUnsafe.start_param === 'open';
+    if (!fromOpenCheckIn || !lm || !tg.isVersionAtLeast || !tg.isVersionAtLeast('8.0')) return null;
+    var early = { settled: false, promise: null };
+    early.promise = new Promise(function (resolve) {
+      function go() {
+        if (!lm.isLocationAvailable || !lm.isAccessGranted) return resolve(null);
+        getLocation().then(function (fix) { resolve({ fix: fix }); }, function (err) { resolve({ error: err }); });
+      }
+      try {
+        if (lm.isInited) go(); else lm.init(go);
+      } catch (e) {
+        resolve(null);
+      }
+    }).then(function (outcome) {
+      early.settled = true;
+      return outcome;
+    });
+    return early;
   }
 
   function submit(fix, isFreshRetry) {
@@ -1012,7 +1072,10 @@
   function freshLocation() {
     return getLocation().then(function (fix) {
       if (tg.platform !== 'android' || fix.source !== 'telegram') return fix;
-      return browserLocation().then(function (fresh) { return fresh; }, function () { return fix; });
+      return browserLocation(TIMING.freshFix).then(function (fresh) { return fresh; }, function () {
+        fix.fallback = true; // said on the next screen: the point may be where the phone last was
+        return fix;
+      });
     });
   }
 
@@ -1066,17 +1129,21 @@
     });
   }
 
-  function browserLocation() {
+  // limitMs caps finding the fix. The browser starts that clock only once permission is given, so
+  // the time someone takes to answer a prompt doesn't count; the outer guard is only a backstop
+  // for a WebView that never answers at all.
+  function browserLocation(limitMs) {
+    var limit = limitMs || 15000;
     return new Promise(function (resolve, reject) {
       if (!navigator.geolocation) return reject({ kind: 'unavailable' });
       var settled = false;
-      var guard = setTimeout(function () { done(reject, { kind: 'timeout' }); }, TIMING.browserLocation);
+      var guard = setTimeout(function () { done(reject, { kind: 'timeout' }); }, Math.max(limit, TIMING.browserLocation) + TIMING.grace);
       function done(fn, v) { if (!settled) { settled = true; clearTimeout(guard); fn(v); } }
       navigator.geolocation.getCurrentPosition(function (p) {
         done(resolve, { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, source: 'browser' });
       }, function (e) {
         done(reject, e.code === 1 ? { kind: 'denied', where: 'app' } : { kind: e.code === 3 ? 'timeout' : 'unavailable' });
-      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: limit });
     });
   }
 

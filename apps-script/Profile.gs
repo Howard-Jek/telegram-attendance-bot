@@ -14,7 +14,7 @@ const MAX_GROUPS_ = 50;
  */
 function profileData_(userId) {
   const groups = readGroups_();
-  const saved = findMember_(userId);
+  const saved = savedProfile_(userId);
   const profile = saved
     ? { fullName: saved.fullName, group: groups.indexOf(saved.group) === -1 ? '' : saved.group }
     : null;
@@ -45,7 +45,9 @@ function handleSaveProfile_(ctx, body) {
     const now = now_();
     upsertMember_(user, fullName, group, now);
     // Already checked in to the open session? That Log row gets the new details too.
-    const session = findActiveSession_(readSessions_(), now.getTime());
+    const sessions = readSessions_();
+    cacheSessions_(sessions, now.getTime());
+    const session = findActiveSession_(sessions, now.getTime());
     const mine = session ? findCheckin_(dedupeKey_(session.id, user.id)) : null;
     if (mine) {
       sheet_(SHEETS_.LOG).getRange(mine.row, LOG_COL_.FULL_NAME, 1, 2).setValues([[textCell_(fullName), groupCell_(group)]]);
@@ -60,16 +62,33 @@ function handleSaveProfile_(ctx, body) {
  * Row 1 is skipped only if it still reads "group", so a list typed from the top still counts.
  */
 function readGroups_() {
+  const copy = cacheGetJson_('groups');
+  if (Array.isArray(copy)) return copy;
   const sheet = sheet_(SHEETS_.GROUPS);
   const last = sheet.getLastRow();
-  if (last < 1) return [];
   const out = [];
+  if (last < 1) {
+    cachePutJson_('groups', out, CACHE_SEC_.GROUPS);
+    return out;
+  }
   sheet.getRange(1, 1, last, 1).getDisplayValues().forEach((r, i) => {
     const g = cleanText_(r[0], MAX_GROUP_CHARS_);
     if (!g || (i === 0 && g.toLowerCase() === HEADERS_.Groups[0])) return;
     if (out.indexOf(g) === -1 && out.length < MAX_GROUPS_) out.push(g);
   });
+  cachePutJson_('groups', out, CACHE_SEC_.GROUPS);
   return out;
+}
+
+/** {fullName, group} as saved on the Members tab (from a copy up to 10 minutes old), or null. */
+function savedProfile_(userId) {
+  const key = 'member:' + userId;
+  const copy = cacheGetJson_(key);
+  if (copy && typeof copy === 'object') return copy.none ? null : copy;
+  const found = findMember_(userId);
+  const profile = found ? { fullName: found.fullName, group: found.group } : null;
+  cachePutJson_(key, profile || { none: true }, CACHE_SEC_.MEMBER);
+  return profile;
 }
 
 /** The member's saved row, or null. User ids are compared as text, whatever the cell format. */
@@ -99,6 +118,8 @@ function upsertMember_(user, fullName, group, now) {
   } else {
     sheet.appendRow(["'" + user.id].concat(fields)); // text, so the id is found whatever the column format
   }
+  SpreadsheetApp.flush(); // copy only what is really saved
+  cachePutJson_('member:' + user.id, { fullName: fullName, group: group }, CACHE_SEC_.MEMBER);
 }
 
 /**

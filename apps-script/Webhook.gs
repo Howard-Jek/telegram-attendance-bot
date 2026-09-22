@@ -65,7 +65,9 @@ function handleUpdate_(update) {
   const seenKey = 'update:' + update.update_id;
   if (cache.get(seenKey)) return;
   cache.put(seenKey, '1', UPDATE_SEEN_SEC_);
-  const ctx = { cfg: loadConfig_(), token: botToken_() };
+  // Group membership changes and upgrades decide GROUP_CHAT_ID, so they read Config fresh.
+  const fresh = !!update.my_chat_member || !!(msg && (msg.migrate_to_chat_id || msg.migrate_from_chat_id));
+  const ctx = { cfg: loadConfig_(fresh), token: botToken_() };
   if (update.my_chat_member) return onBotMembership_(ctx, update.my_chat_member);
   if (update.chat_member) return onMemberChange_(ctx, update.chat_member);
   if (update.message && update.message.chat) return onMessage_(ctx, update.message);
@@ -105,7 +107,7 @@ function onBotMembership_(ctx, change) {
       return; // stay: the connect link's /start may be on its way
     }
     if (connectGroup_(ctx, chatId, isAdminNow)) return;
-    ctx.cfg = loadConfig_();
+    ctx.cfg = loadConfig_(true);
   }
 
   if (chatId === ctx.cfg.groupChatId) {
@@ -133,7 +135,7 @@ function onBotMembership_(ctx, change) {
  */
 function connectGroup_(ctx, chatId, isBotAdmin) {
   const won = withScriptLock_(() => {
-    const current = loadConfig_().groupChatId;
+    const current = loadConfig_(true).groupChatId;
     if (current) return current === chatId;
     setConfigValue_('GROUP_CHAT_ID', chatId);
     PropertiesService.getScriptProperties().deleteProperty('CONNECT_CODE');
@@ -244,7 +246,7 @@ function onGroupCheckin_(ctx, msg) {
     sendText_(ctx.token, msg.chat.id, NOT_READY_TEXT_);
     return;
   }
-  const session = findActiveSession_(readSessions_(), now_().getTime());
+  const session = findActiveSession_(sessionsForRead_(), now_().getTime());
   const text = session ? openText_(session) : '📍 No check-in is open right now. Admins can start one from this button.';
   const posted = postLiveMessage_(ctx, text, session ? session.id : '');
   if (!posted.ok) console.warn('Could not post the Check in button: ' + posted.description);

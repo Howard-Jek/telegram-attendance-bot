@@ -9,7 +9,9 @@
   var sc = window.SCENARIOS[name];
   if (!sc) throw new Error('Unknown scenario: ' + name);
   var theme = window.THEMES[params.get('theme') || 'light'];
-  var log = (window.__mini = { scenario: name, calls: [], confirmed: [], openedSettings: 0, closed: 0, nativeConfirms: 0, openedLinks: [] });
+  var log = (window.__mini = { scenario: name, calls: [], confirmed: [], openedSettings: 0, closed: 0, nativeConfirms: 0, openedLinks: [], timeline: [] });
+  var t0 = Date.now();
+  function mark(what) { log.timeline.push({ what: what, t: Date.now() - t0 }); } // function declarations are hoisted
   // The page must never fall back to the browser's own confirm() inside Telegram.
   window.confirm = function () { log.nativeConfirms++; return true; };
 
@@ -19,6 +21,7 @@
   window.fetch = function (url, opts) {
     var body = JSON.parse(opts.body);
     log.calls.push(body);
+    mark('sent:' + body.action);
     var q = queues[body.action] || [];
     var next = q.length > 1 ? q.shift() : q[0];
     if (!next) return Promise.reject(new TypeError('no mock response for ' + body.action));
@@ -26,7 +29,7 @@
     if (next.network) return Promise.reject(new TypeError('Failed to fetch'));
     var text = next.html ? '<!DOCTYPE html><html><body>Too many simultaneous invocations</body></html>' : JSON.stringify(next);
     return new Promise(function (resolve) {
-      setTimeout(function () { resolve(new Response(text, { status: 200 })); }, 60);
+      setTimeout(function () { mark('answered:' + body.action); resolve(new Response(text, { status: 200 })); }, sc.apiDelay || 60);
     });
   };
 
@@ -35,11 +38,17 @@
   Object.defineProperty(navigator, 'geolocation', {
     configurable: true,
     value: {
-      getCurrentPosition: function (ok, err) {
+      getCurrentPosition: function (ok, err, opts) {
+        mark('browser-location');
+        var delay = loc.browserDelay || 40;
+        // Like a real browser, give up with TIMEOUT (3) after opts.timeout.
+        if (opts && opts.timeout && delay > opts.timeout) {
+          return setTimeout(function () { err({ code: 3 }); }, opts.timeout);
+        }
         setTimeout(function () {
           if (loc.browser) ok({ coords: loc.browser });
           else err({ code: loc.browserError || 2 });
-        }, loc.browserDelay || 40);
+        }, delay);
       },
     },
   });
@@ -69,13 +78,14 @@
   // itself lacks the phone's permission: no answer at all). loc.deviceOff: access granted but the
   // phone has Location switched off, so the answer is null.
   var granted = loc.lm !== null;
+  // loc.preGranted: this bot was allowed location on an earlier visit.
   var inited = false;
   var available = true;
   var lm = {
     get isInited() { return inited; },
     get isLocationAvailable() { return inited && available; },
-    isAccessRequested: !!loc.asked, // loc.asked: this bot has asked for location before
-    isAccessGranted: false,
+    isAccessRequested: !!loc.asked || !!loc.preGranted, // loc.asked: this bot has asked for location before
+    isAccessGranted: !!loc.preGranted,
     init: function (cb) {
       if (!atLeast('8.0')) { console.warn('[Telegram.WebApp] LocationManager is not supported in version ' + version); return lm; }
       if (inited) return lm; // the real SDK does not call back again
@@ -86,6 +96,7 @@
       if (!atLeast('8.0')) { console.warn('[Telegram.WebApp] LocationManager is not supported'); return lm; }
       if (!inited) throw new Error('WebAppLocationManagerNotInited');
       if (!available) throw new Error('WebAppLocationManagerLocationNotAvailable');
+      mark('location-requested');
       if (loc.lm === 'silent') return lm;
       setTimeout(function () {
         lm.isAccessRequested = true;
@@ -117,7 +128,7 @@
   window.Telegram = {
     WebApp: {
       initData: sc.initData !== undefined ? sc.initData : 'user=%7B%22id%22%3A42%7D&auth_date=1790000000&hash=mock',
-      initDataUnsafe: { user: sc.tgUser || { id: 42, first_name: 'Cy', last_name: 'Member' } },
+      initDataUnsafe: { user: sc.tgUser || { id: 42, first_name: 'Cy', last_name: 'Member' }, start_param: sc.startParam },
       platform: platform,
       version: version,
       colorScheme: params.get('theme') === 'dark' ? 'dark' : 'light',

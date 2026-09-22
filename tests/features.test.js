@@ -474,7 +474,7 @@ test('start: announces in the group with the button, and records the message', (
   assert.equal(res.data.warning, undefined);
   const [post] = env.visible();
   assert.match(post.text, /Check-in is open until 11:30/);
-  assert.deepEqual(post.buttons, [{ text: '📍 Check in', url: 'https://t.me/test_checkin_bot/checkin' }]);
+  assert.deepEqual(post.buttons, [{ text: '📍 Check in', url: 'https://t.me/test_checkin_bot/checkin?startapp=open' }]);
   assert.equal(env.rows('Sessions')[0][5], post.messageId);
 });
 
@@ -489,7 +489,7 @@ test('start: the announcement replaces an earlier /checkin button', () => {
 test('start: MINI_APP_LINK without https:// still works', () => {
   const env = setup({ config: { MINI_APP_LINK: 't.me/test_checkin_bot/checkin' } });
   env.start(ADMIN);
-  assert.equal(env.visible()[0].buttons[0].url, 'https://t.me/test_checkin_bot/checkin');
+  assert.equal(env.visible()[0].buttons[0].url, 'https://t.me/test_checkin_bot/checkin?startapp=open');
 });
 
 test('start: if the group can\'t be told, the check-in still opens and the admin gets the link to share', () => {
@@ -676,6 +676,7 @@ test('profile: the group must be on the Groups tab; a removed group is asked for
   assert.equal(env.rows('Members').length, 0);
   env.saveProfile(MEMBER, 'Cy Tan', 'Bravo');
   env.sheet('Groups').getRange(3, 1).setValue('Bravo Team'); // the owner renames it
+  env.setNow(T0 + 61 * 1000); // the Groups copy lasts a minute
   env.start(ADMIN);
   assert.deepEqual(env.checkin(MEMBER).data.profile, { fullName: 'Cy Tan', group: '' });
   assert.equal(env.rows('Log')[0][12], '');
@@ -817,3 +818,136 @@ test('setupSheets(): an existing Sheet from the first version gains the new colu
   assert.ok(env.logs.some((l) => /SITE_LAT is no longer used/.test(l.text)));
   assert.doesNotThrow(() => env.eval('readSessions_()'));
 });
+
+// ---------- speed: copies of Sheet data (Cache.gs) ----------
+
+const opens = (env) => env.events.filter((e) => e.type === 'open').length;
+const finds = (env) => env.events.filter((e) => e.type === 'find').length;
+
+test('speed: a warm status call never opens the Sheet', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.req('status', MEMBER); // first call looks the member up in Telegram and warms the copies
+  env.events.length = 0;
+  const s = env.req('status', MEMBER);
+  assert.equal(s.data.activeSession.closesAtText, '11:30');
+  assert.equal(opens(env), 0);
+  env.checkin(MEMBER);
+  env.events.length = 0;
+  const again = env.req('status', MEMBER);
+  assert.equal(again.data.myCheckin.atText, '10:30');
+  assert.equal(opens(env), 0, 'the check-in already warmed the profile and groups copies');
+});
+
+test('speed: a repeat check-in is answered from the copy; a first one is still confirmed in the Log', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER2); // the Log isn't empty, so a real search happens
+  env.events.length = 0;
+  assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN');
+  assert.equal(finds(env), 1, 'the Log decides before a row is written');
+  env.events.length = 0;
+  assert.equal(env.checkin(MEMBER).code, 'ALREADY_CHECKED_IN');
+  assert.equal(finds(env), 0);
+  assert.equal(env.rows('Log').length, 2);
+});
+
+// Cache review finding: the copy must never make the write decision.
+test('cache: an error after the row is written can\'t lead to a second row on retry', () => {
+  const env = setup();
+  env.start(ADMIN);
+  const sessions = env.sheet('Sessions');
+  const realGetRange = sessions.getRange.bind(sessions);
+  let failOnce = true;
+  sessions.getRange = (row, col, ...rest) => {
+    if (col === 8 && row > 1 && failOnce) { failOnce = false; throw new Error('Service Spreadsheets timed out while accessing document'); }
+    return realGetRange(row, col, ...rest);
+  };
+  assert.equal(env.checkin(MEMBER).code, 'SERVER_ERROR');
+  assert.equal(env.rows('Log').length, 1, 'the row did land');
+  assert.equal(env.checkin(MEMBER).code, 'ALREADY_CHECKED_IN');
+  assert.equal(env.rows('Log').length, 1);
+});
+
+test('cache: a check-in row added by hand stops the app adding another', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.sheet('Log').appendRow([new Date(T0), 'S-20260921-1030', MEMBER.id, 'Cy', 'Member', 'cy', '', '', '', '', `S-20260921-1030:${MEMBER.id}`, '', '']);
+  assert.equal(env.checkin(MEMBER).code, 'ALREADY_CHECKED_IN');
+  assert.equal(env.rows('Log').length, 1);
+});
+
+test('cache: a slow Config reader can\'t put an old GROUP_CHAT_ID back after it changes', () => {
+  const env = setup({ config: { GROUP_CHAT_ID: BASIC_GROUP } });
+  const stale = env.eval('JSON.stringify(loadConfig_())') && env.eval("(function(){ var raw = {}; sheet_('Config').getDataRange().getValues().forEach(function (r) { raw[String(r[0]).trim()] = r[1]; }); return raw; })()");
+  const oldKey = env.eval('configCacheKey_()');
+  env.eval("setConfigValue_('GROUP_CHAT_ID', '-1009876543210')");
+  env.eval('cachePutJson_(' + JSON.stringify(oldKey) + ', ' + JSON.stringify(stale) + ', 60)'); // the late put
+  assert.equal(env.eval('loadConfig_().groupChatId'), '-1009876543210');
+});
+
+test('the group button opened during a session carries a hint, so the app can find the location early', () => {
+  const env = hooked();
+  env.say(MEMBER, '/checkin');
+  assert.equal(buttons(env)[0].buttons[0].url, 'https://t.me/test_checkin_bot/checkin', 'nothing open: no hint');
+  env.start(ADMIN);
+  assert.equal(buttons(env)[0].buttons[0].url, 'https://t.me/test_checkin_bot/checkin?startapp=open');
+  const withQuery = setup({ config: { MINI_APP_LINK: 'https://t.me/test_checkin_bot/checkin?startapp=x' } });
+  withQuery.start(ADMIN);
+  assert.equal(withQuery.visible()[0].buttons[0].url, 'https://t.me/test_checkin_bot/checkin?startapp=x', 'the owner\'s own parameter is kept');
+});
+
+test('cache: a lost copy of who checked in falls back to the Log (no duplicates, status still right)', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.cache.delete('checkins:S-20260921-1030');
+  assert.equal(env.req('status', MEMBER).data.myCheckin.atText, '10:30');
+  assert.equal(env.checkin(MEMBER).code, 'ALREADY_CHECKED_IN');
+  assert.equal(env.rows('Log').length, 1);
+  // A partial copy never answers "not checked in" by itself.
+  assert.equal(env.checkin(MEMBER2).code, 'CHECKED_IN');
+  assert.equal(env.req('status', ADMIN2).data.myCheckin, null);
+  assert.equal(env.checkin(MEMBER2).code, 'ALREADY_CHECKED_IN');
+  assert.equal(env.rows('Log').length, 2);
+});
+
+test('cache: only the lock holder writes the sessions copy (a slow reader can\'t restore an old one)', () => {
+  const env = setup();
+  env.cache.delete('sessions:current');
+  env.req('status', MEMBER); // reads the Sheet, outside the lock
+  assert.equal(env.cache.has('sessions:current'), false);
+  env.start(ADMIN);
+  assert.ok(env.cache.has('sessions:current'));
+  assert.equal(env.req('status', MEMBER2).data.activeSession.closesAtText, '11:30', 'a new session shows at once');
+});
+
+test('cache: moving the point updates the copy status reads', () => {
+  const env = setup();
+  env.start(ADMIN, { lat: SITE.lat + 0.02, lng: SITE.lng, accuracy: 10 });
+  env.req('moveSite', ADMIN, { location: SITE_FIX });
+  const copy = JSON.parse(env.cache.get('sessions:current').value);
+  assert.deepEqual(copy[0].site, { lat: SITE_FIX.lat, lng: SITE_FIX.lng });
+});
+
+test('cache: Config edits take effect within a minute', () => {
+  const env = setup();
+  assert.equal(env.req('status', MEMBER).data.radiusM, 150);
+  const cfg = env.sheet('Config');
+  for (let r = 2; r <= cfg.getLastRow(); r++) if (cfg.getRange(r, 1).getValue() === 'RADIUS_M') cfg.getRange(r, 2).setValue('300');
+  assert.equal(env.req('status', MEMBER).data.radiusM, 150, 'still the copy');
+  env.setNow(T0 + 61 * 1000);
+  assert.equal(env.req('status', MEMBER).data.radiusM, 300);
+});
+
+test('cache: a session edited by hand in the Sheet is picked up at the next close-job run', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.sheet('Sessions').getRange(2, 5).setValue(new Date(T0 + 90 * MIN)); // the owner extends it to 12:00
+  assert.equal(env.req('status', MEMBER).data.activeSession.closesAtText, '11:30', 'still the copy');
+  env.call('closeExpiredSessions');
+  assert.equal(env.req('status', MEMBER).data.activeSession.closesAtText, '12:00');
+  env.setNow(T0 + 75 * MIN);
+  assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN', 'check-ins always read the Sheet under the lock');
+});
+

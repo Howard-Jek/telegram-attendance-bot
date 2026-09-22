@@ -135,6 +135,21 @@
       }
       if (e.confirmed && JSON.stringify(log.confirmed) !== JSON.stringify(e.confirmed)) errors.push('confirm ' + JSON.stringify(log.confirmed));
       if (e.choices && JSON.stringify(choices(doc())) !== JSON.stringify(e.choices)) errors.push('choices ' + JSON.stringify(choices(doc())));
+      var when = function (what) { var m = log.timeline.find(function (x) { return x.what === what; }); return m ? m.t : null; };
+      if (e.locationDuringStatus) {
+        var asked = when('location-requested'), answered = when('answered:status');
+        if (asked === null || answered === null || asked >= answered) errors.push('location not requested while status loaded ' + JSON.stringify(log.timeline));
+      }
+      if (e.locationAfterStatus) {
+        var asked2 = when('location-requested'), answered2 = when('answered:status');
+        if (asked2 === null || answered2 === null || asked2 < answered2) errors.push('location requested before status answered ' + JSON.stringify(log.timeline));
+      }
+      if (e.noLocationRequest && when('location-requested') !== null) errors.push('location was requested');
+      if (e.noBrowserLocation && when('browser-location') !== null) errors.push('browser geolocation was used');
+      if (e.locationRequests !== undefined) {
+        var n = log.timeline.filter(function (x) { return x.what === 'location-requested'; }).length;
+        if (n !== e.locationRequests) errors.push('location requested ' + n + ' times');
+      }
       if (e.inputValue !== undefined) {
         var inp = doc().getElementById('full-name');
         var v = inp ? inp.value : null;

@@ -15,7 +15,8 @@ function setup() {
   const username = me.result.username;
   PropertiesService.getScriptProperties().setProperty('BOT_USERNAME', username);
   connectWebhook_(token);
-  if (!CONFIG_CHECKS_.GROUP_CHAT_ID(loadConfig_())) ensureConnectCode_();
+  bumpConfigCache_(); // the owner may have just edited Config
+  if (!CONFIG_CHECKS_.GROUP_CHAT_ID(loadConfig_(true))) ensureConnectCode_();
   setBotCommands_(token);
   installTriggers_();
   setupReport_(token, me.result).forEach((line) => Logger.log(line));
@@ -113,7 +114,7 @@ function installTriggers_() {
 
 /** What setup() did, and what the owner still has to do. */
 function setupReport_(token, bot) {
-  const cfg = loadConfig_();
+  const cfg = loadConfig_(true);
   const lines = ['Setup finished for @' + bot.username + '. Webhook connected; close job runs every 5 minutes.'];
   if (!CONFIG_CHECKS_.GROUP_CHAT_ID(cfg)) {
     lines.push('NEXT: open this link on your phone and pick your group. It adds the bot as an admin and connects it ' +

@@ -7,8 +7,10 @@
 function handleStatus_(ctx) {
   const admin = checkAdmin_(ctx);
   if (admin === 'BUSY') return reply_(false, 'BUSY', MESSAGES_.BUSY);
-  const session = findActiveSession_(readSessions_(), now_().getTime());
-  const mine = session ? findCheckin_(dedupeKey_(session.id, ctx.user.id)) : null;
+  // Served from the copies in Cache.gs when possible: this is the first call on every open.
+  const session = findActiveSession_(sessionsForRead_(), now_().getTime());
+  let mine = session ? knownCheckin_(session, ctx.user.id) : null;
+  if (mine === undefined) mine = findCheckin_(dedupeKey_(session.id, ctx.user.id));
   const view = session ? sessionView_(session) : null;
   if (view && !admin) delete view.startedByName; // anyone with the link can call status
   const data = {
@@ -37,8 +39,12 @@ function handleStartSession_(ctx, body) {
   const result = withScriptLock_(() => {
     const now = now_();
     // Any session still running blocks every admin, including the one who started it.
-    const blocking = findBlockingSession_(readSessions_(), now.getTime());
-    if (blocking) return { blocking: blocking };
+    const sessions = readSessions_();
+    const blocking = findBlockingSession_(sessions, now.getTime());
+    if (blocking) {
+      cacheSessions_(sessions, now.getTime());
+      return { blocking: blocking };
+    }
 
     const session = {
       id: 'S-' + Utilities.formatDate(now, TZ_, 'yyyyMMdd-HHmm'),
@@ -51,6 +57,11 @@ function handleStartSession_(ctx, body) {
     sheet.appendRow([session.id, Number(user.id), textCell_(user.name), session.opensAt, session.closesAt,
       '', 'open', 0, site.lat, site.lng, round1_(site.accuracy)]);
     session.row = sheet.getLastRow();
+    session.status = 'open';
+    session.count = 0;
+    session.site = { lat: site.lat, lng: site.lng };
+    cacheSessions_(sessions.concat([session]), now.getTime());
+    startCheckinsCopy_(session, now);
     return { session: session };
   });
 
@@ -86,10 +97,14 @@ function handleMoveSite_(ctx, body) {
   if (!site.ok) return site.reply;
 
   const result = withScriptLock_(() => {
-    const session = findActiveSession_(readSessions_(), now_().getTime());
+    const nowMs = now_().getTime();
+    const sessions = readSessions_();
+    const session = findActiveSession_(sessions, nowMs);
     if (!session) return reply_(false, 'NO_ACTIVE_SESSION', MESSAGES_.NO_ACTIVE_SESSION);
     sheet_(SHEETS_.SESSIONS).getRange(session.row, SESSION_COL_.SITE_LAT, 1, 3)
       .setValues([[site.lat, site.lng, round1_(site.accuracy)]]);
+    session.site = { lat: site.lat, lng: site.lng };
+    cacheSessions_(sessions, nowMs);
     console.info('Session ' + session.id + ' check-in point moved by user ' + ctx.user.id);
     return reply_(true, 'SITE_MOVED', 'The check-in point is now where you are.', sessionView_(session));
   });
