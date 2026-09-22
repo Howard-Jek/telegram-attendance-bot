@@ -1,6 +1,6 @@
 /**
- * Groups and full names. The owner lists the groups on the Groups tab; each member picks theirs
- * and gives their full name once in the Mini App. Both are kept on the Members tab (where an
+ * Groups and names. The owner lists the groups on the Groups tab; each member picks theirs
+ * and gives their rank and full name once in the Mini App (kept in the full_name column). Both are kept on the Members tab (where an
  * admin can correct them) and copied onto every Log row, so the Log reads by real name and group.
  */
 
@@ -32,7 +32,7 @@ function handleSaveProfile_(ctx, body) {
 
   const fullName = cleanText_(body.fullName, MAX_NAME_CHARS_);
   if (!fullName) {
-    return reply_(false, 'INVALID_NAME', 'Please enter your full name (up to ' + MAX_NAME_CHARS_ + ' characters).');
+    return reply_(false, 'INVALID_NAME', 'Please enter your rank and full name (up to ' + MAX_NAME_CHARS_ + ' characters).');
   }
   const groups = readGroups_();
   let group = cleanText_(body.group, MAX_GROUP_CHARS_);

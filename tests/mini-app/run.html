@@ -158,6 +158,29 @@
         var v = inp ? inp.value : null;
         if (v !== e.inputValue) errors.push('name field ' + JSON.stringify(v));
       }
+      if (e.inputValues) {
+        Object.keys(e.inputValues).forEach(function (id) {
+          var f = doc().getElementById(id);
+          if (!f || f.value !== e.inputValues[id]) errors.push('field ' + id + ' ' + JSON.stringify(f ? f.value : null));
+        });
+      }
+      if (e.placeholder !== undefined) {
+        var ph = doc().getElementById('full-name');
+        if (!ph || ph.placeholder !== e.placeholder) errors.push('placeholder ' + JSON.stringify(ph && ph.placeholder));
+      }
+      (e.invalid || []).forEach(function (id) {
+        var f = doc().getElementById(id);
+        if (!f || f.getAttribute('aria-invalid') !== 'true') errors.push(id + ' not marked invalid');
+        var said = f && (f.getAttribute('aria-describedby') || '').split(' ').map(function (d) { return doc().getElementById(d); });
+        if (!said || !said[0] || said[0].className !== 'field-error') errors.push(id + ' error not linked');
+      });
+      if (e.focusId && doc().activeElement && doc().activeElement.id !== e.focusId) errors.push('focus on ' + (doc().activeElement.id || doc().activeElement.tagName));
+      if (e.sentSettings) {
+        var sets = log.calls.filter(function (c) { return c.action === 'saveSettings'; });
+        var lastSet = sets[sets.length - 1];
+        var gotSet = lastSet ? { sessionMinutes: lastSet.sessionMinutes, radiusM: lastSet.radiusM, maxAccuracyM: lastSet.maxAccuracyM } : null;
+        if (JSON.stringify(gotSet) !== JSON.stringify(e.sentSettings)) errors.push('saved settings ' + JSON.stringify(gotSet));
+      }
       if (e.sentProfile) {
         var saves = log.calls.filter(function (c) { return c.action === 'saveProfile'; });
         var last = saves[saves.length - 1];

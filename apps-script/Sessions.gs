@@ -17,6 +17,7 @@ function handleStatus_(ctx) {
     isAdmin: admin,
     sessionMinutes: ctx.cfg.sessionMinutes,
     radiusM: ctx.cfg.radiusM,
+    maxAccuracyM: ctx.cfg.maxAccuracyM,
     activeSession: view,
     myCheckin: mine ? { at: mine.at.toISOString(), atText: hhmm_(mine.at) } : null,
   };

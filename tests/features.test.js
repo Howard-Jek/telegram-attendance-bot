@@ -687,6 +687,7 @@ test('profile: names must be real text of sensible length; odd characters are cl
   for (const name of ['', '   ', undefined, 42, { a: 1 }, 'x'.repeat(61)]) {
     assert.equal(env.saveProfile(MEMBER, name, 'Alpha').code, 'INVALID_NAME', JSON.stringify(name));
   }
+  assert.match(env.saveProfile(MEMBER, '', 'Alpha').message, /rank and full name/);
   assert.equal(env.saveProfile(MEMBER, 'x'.repeat(60), 'Alpha').code, 'PROFILE_SAVED');
   const r = env.saveProfile(MEMBER, 'Wei‮Ling\nTan  李', 'Alpha');
   assert.equal(r.data.profile.fullName, 'Wei Ling Tan 李');
@@ -1074,3 +1075,112 @@ test('burst: a profile save never writes the sessions copy (only the check-in lo
   assert.equal(env.cache.has('sessions:current'), false);
 });
 
+
+// ---------- check-in settings, changed from the app ----------
+
+const SETTINGS = { sessionMinutes: 45, radiusM: 250, maxAccuracyM: 80 };
+const saveSettings = (env, user, values) => env.req('saveSettings', user, values);
+const setConfigCell = (env, key, value) => {
+  const cfg = env.sheet('Config');
+  for (let r = 2; r <= cfg.getLastRow(); r++) if (cfg.getRange(r, 1).getValue() === key) cfg.getRange(r, 2).setValue(value);
+};
+
+test('settings: an admin changes the time, distance and accuracy from the app; they apply at once', () => {
+  const env = setup();
+  assert.equal(env.req('status', MEMBER).data.maxAccuracyM, 100, 'status tells the app the accuracy needed too');
+  const r = saveSettings(env, ADMIN, SETTINGS);
+  assert.equal(r.code, 'SETTINGS_SAVED');
+  assert.deepEqual(r.data, SETTINGS);
+  assert.deepEqual([env.config('SESSION_MINUTES'), env.config('RADIUS_M'), env.config('MAX_ACCURACY_M')], ['45', '250', '80']);
+  const s = env.req('status', MEMBER).data; // no minute-long wait for the Config copy
+  assert.deepEqual([s.sessionMinutes, s.radiusM, s.maxAccuracyM], [45, 250, 80]);
+  assert.equal(Date.parse(env.start(ADMIN).data.closesAt), T0 + 45 * MIN);
+});
+
+test('settings: a new distance applies to the check-in already open; a new time only to the next', () => {
+  const env = setup();
+  const first = env.start(ADMIN);
+  assert.equal(saveSettings(env, ADMIN, { sessionMinutes: 30, radiusM: 40, maxAccuracyM: 100 }).code, 'SETTINGS_SAVED');
+  assert.equal(env.checkin(MEMBER, ONSITE).code, 'OUT_OF_RANGE'); // ~56 m away
+  saveSettings(env, ADMIN, { sessionMinutes: 30, radiusM: 100, maxAccuracyM: 100 });
+  assert.equal(env.checkin(MEMBER, ONSITE).code, 'CHECKED_IN');
+  assert.equal(env.req('status', MEMBER).data.activeSession.closesAt, first.data.closesAt);
+});
+
+test('settings: only admins (group admins or ADMIN_IDS) can change them', () => {
+  const env = setup({ statuses: { [OUTSIDER.id]: 'left' }, config: { ADMIN_IDS: String(MEMBER2.id) } });
+  for (const user of [MEMBER, OUTSIDER]) {
+    const r = saveSettings(env, user, SETTINGS);
+    assert.equal(r.code, 'NOT_ADMIN');
+    assert.match(r.message, /settings/);
+  }
+  assert.equal(env.config('RADIUS_M'), '150');
+  assert.equal(saveSettings(env, MEMBER2, SETTINGS).code, 'SETTINGS_SAVED');
+  assert.equal(saveSettings(env, ADMIN2, { ...SETTINGS, radiusM: 300 }).code, 'SETTINGS_SAVED');
+  assert.equal(env.config('RADIUS_M'), '300');
+});
+
+test('settings: every value must be a whole number in range, or nothing is saved', () => {
+  const env = setup();
+  const bad = [
+    ['sessionMinutes', 0], ['sessionMinutes', 721], ['sessionMinutes', 1.5], ['sessionMinutes', '60'],
+    ['sessionMinutes', null], ['sessionMinutes', undefined],
+    ['radiusM', 9], ['radiusM', 5001], ['radiusM', -150], ['radiusM', 1e9], ['radiusM', true],
+    ['maxAccuracyM', 9], ['maxAccuracyM', 501], ['maxAccuracyM', [100]], ['maxAccuracyM', { v: 100 }],
+  ];
+  for (const [field, value] of bad) {
+    const r = saveSettings(env, ADMIN, { ...SETTINGS, [field]: value });
+    assert.equal(r.code, 'INVALID_SETTINGS', field + '=' + JSON.stringify(value));
+    assert.deepEqual(Object.keys(r.data.errors), [field]);
+    assert.match(r.data.errors[field], /^Enter a whole number from \d+ to \d+\.$/);
+  }
+  const all = saveSettings(env, ADMIN, { sessionMinutes: 0, radiusM: 0, maxAccuracyM: 0 });
+  assert.deepEqual(Object.keys(all.data.errors).sort(), ['maxAccuracyM', 'radiusM', 'sessionMinutes']);
+  assert.deepEqual([env.config('SESSION_MINUTES'), env.config('RADIUS_M'), env.config('MAX_ACCURACY_M')], ['60', '150', '100']);
+  // The edges are allowed.
+  assert.equal(saveSettings(env, ADMIN, { sessionMinutes: 1, radiusM: 10, maxAccuracyM: 10 }).code, 'SETTINGS_SAVED');
+  assert.equal(saveSettings(env, ADMIN, { sessionMinutes: 720, radiusM: 5000, maxAccuracyM: 500 }).code, 'SETTINGS_SAVED');
+});
+
+test('settings: a busy lock or a rate-limited admin lookup -> BUSY, and nothing is saved', () => {
+  const env = setup();
+  env.lockHeldElsewhere = true;
+  assert.equal(saveSettings(env, ADMIN, SETTINGS).code, 'BUSY');
+  assert.equal(env.config('RADIUS_M'), '150');
+  const limited = setup({ statuses: { [ADMIN.id]: { ok: false, error_code: 429, description: 'Too Many Requests: retry after 2' } } });
+  assert.equal(saveSettings(limited, ADMIN, SETTINGS).code, 'BUSY');
+  assert.equal(limited.config('RADIUS_M'), '150');
+});
+
+test('settings: saved as plain text like the rest of Config; a missing row is added; the owner can still edit them', () => {
+  const env = setup();
+  const cfg = env.sheet('Config');
+  for (let r = 2; r <= cfg.getLastRow(); r++) {
+    if (cfg.getRange(r, 1).getValue() === 'MAX_ACCURACY_M') cfg.getRange(r, 1, 1, 2).setValues([['', '']]);
+  }
+  env.events.length = 0;
+  saveSettings(env, ADMIN, SETTINGS);
+  assert.equal(env.config('RADIUS_M'), '250');
+  assert.equal(env.rows('Config').filter((r) => r[0] === 'MAX_ACCURACY_M').length, 1);
+  assert.equal(env.config('MAX_ACCURACY_M'), '80');
+  assert.ok(env.events.some((e) => e.type === 'tryLock'), 'written under the script lock');
+  // The owner's own edit in the Sheet still wins, within the usual minute.
+  setConfigCell(env, 'RADIUS_M', '300');
+  env.setNow(T0 + 61 * 1000);
+  assert.equal(env.req('status', MEMBER).data.radiusM, 300);
+});
+
+test('settings: who changed what is logged', () => {
+  const env = setup();
+  saveSettings(env, ADMIN, SETTINGS);
+  assert.ok(env.logs.some((l) => /settings/i.test(l.text) && l.text.includes(String(ADMIN.id)) && l.text.includes('250')),
+    JSON.stringify(env.logs));
+});
+
+test('settings: if the owner typed a key twice, the app changes the row that is read (the last)', () => {
+  const env = setup();
+  env.sheet('Config').appendRow(['RADIUS_M', '200']);
+  assert.equal(env.req('status', MEMBER).data.radiusM, 200);
+  saveSettings(env, ADMIN, SETTINGS);
+  assert.equal(env.req('status', MEMBER).data.radiusM, 250);
+});

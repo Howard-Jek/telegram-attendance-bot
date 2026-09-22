@@ -101,25 +101,31 @@ function assertConfig_(cfg, keys) {
 }
 
 /**
- * Writes one Config value as plain text, adding the row if the key is missing. The cell is
+ * Writes Config values as plain text, adding a row for any key that is missing. The cells are
  * formatted as plain text first, so "-100123..." stays text; no leading apostrophe, because a
- * plain-text cell may keep it as part of the value. Only for values the bot itself produces,
- * such as chat ids. Callers that decide based on the current value should hold the script lock.
+ * plain-text cell may keep it as part of the value. If a key appears twice, the last row is the
+ * one loadConfig_ reads, so that is the one written. Only for values the bot itself produces or
+ * has checked (chat ids, validated settings). Callers that decide based on the current value, or
+ * may add a row, should hold the script lock.
  */
-function setConfigValue_(key, value) {
+function setConfigValues_(values) {
   const sheet = sheet_(SHEETS_.CONFIG);
-  const keys = sheet.getRange(1, 1, Math.max(1, sheet.getLastRow()), 1).getValues();
-  let row = 0;
-  for (let i = 0; i < keys.length && !row; i++) {
-    if (String(keys[i][0]).trim() === key) row = i + 1;
-  }
-  if (!row) {
-    sheet.appendRow([key, '']);
-    row = sheet.getLastRow();
-  }
-  sheet.getRange(row, 2).setNumberFormat('@').setValue(String(value));
+  const keys = sheet.getRange(1, 1, Math.max(1, sheet.getLastRow()), 1).getValues().map((r) => String(r[0]).trim());
+  Object.keys(values).forEach((key) => {
+    let row = keys.lastIndexOf(key) + 1;
+    if (!row) {
+      sheet.appendRow([key, '']);
+      row = sheet.getLastRow();
+      keys[row - 1] = key;
+    }
+    sheet.getRange(row, 2).setNumberFormat('@').setValue(String(values[key]));
+  });
   SpreadsheetApp.flush();
   bumpConfigCache_();
+}
+
+function setConfigValue_(key, value) {
+  setConfigValues_({ [key]: value });
 }
 
 function isBlank_(v) {

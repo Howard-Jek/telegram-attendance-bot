@@ -28,6 +28,7 @@ const ACTIONS_ = {
   moveSite: (ctx, body) => handleMoveSite_(ctx, body),
   checkin: (ctx, body) => handleCheckin_(ctx, body),
   saveProfile: (ctx, body) => handleSaveProfile_(ctx, body),
+  saveSettings: (ctx, body) => handleSaveSettings_(ctx, body),
 };
 
 /** Owner-fixable setup problem; its message is safe to show to users. */

@@ -124,6 +124,8 @@
   .mark[data-tone="good"] { color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 12%, var(--bg)); }
   .mark[data-tone="bad"] { color: var(--danger-ink); background: color-mix(in srgb, var(--danger-ink) 14%, var(--bg)); }
   .mark svg { width: 40px; height: 40px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .mark.is-small { width: 56px; height: 56px; } /* a form screen: room for the fields */
+  .mark.is-small svg { width: 28px; height: 28px; }
   /* The "no" mirrors the stamp: the same double ring, in the danger colour, with a bare ✕. */
   .mark[data-tone="no"] {
     width: 120px;
@@ -240,6 +242,13 @@
   .choice.is-saving { opacity: 1; }
   @media (hover: hover) { .choice:not(:disabled):hover { filter: brightness(0.94); } }
   .field-error { margin: 0; font-size: var(--t-label); font-weight: 600; color: var(--danger-ink); }
+  .input::placeholder { color: var(--muted); opacity: 1; }
+  /* Check-in settings (admins): a short number field with its unit beside it. */
+  .unit-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--s3); row-gap: var(--s1); }
+  .unit-row .input { width: 7.5rem; font-variant-numeric: tabular-nums; }
+  .unit { font-weight: 600; }
+  .field-help { margin: 0; font-size: var(--t-label); color: var(--muted); text-wrap: pretty; }
+  .settings .input { scroll-margin-bottom: 10rem; } /* a focused field clears the sticky buttons */
   /* The saved group and name, tappable to change. */
   .tag {
     appearance: none;
@@ -379,6 +388,12 @@
   var nameInvalid = false;
   var draftName = null;    // what they typed, kept across re-renders
   var justMoved = false;   // an admin just moved the check-in point (said once on the next screen)
+  var justSaved = '';      // the settings an admin just saved (said once on the next screen)
+  var settingsBack = null; // re-renders the screen the settings were opened from
+  var settingsDraft = null; // {sessionMinutes, radiusM, maxAccuracyM} as typed
+  var settingsErrors = {};  // field -> message
+  var settingsNotice = '';
+  var savingSettings = false;
   var lastDistanceM = 0;   // the admin's distance from the point, for the Move confirmation
 
   // ---------- views ----------
@@ -438,10 +453,24 @@
     },
     adminIdle: function () {
       var mins = (status && status.sessionMinutes) || 60;
+      var hint = justSaved || 'Once started, a check-in can’t be ended early.';
+      justSaved = '';
       return { state: 'admin-idle', icon: 'flag', title: 'No check-in open',
         line: 'Start one where you’re standing. Members within ' + radiusText() + ' of you can check in for the next ' + mins + ' minutes.',
-        hint: 'Once started, a check-in can’t be ended early.',
-        actions: [{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }] };
+        hint: hint,
+        actions: [{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession },
+          { label: 'Change settings', onClick: function () { openSettings(function () { render(views.adminIdle()); }); } }] };
+    },
+    // Admins only: how long check-ins stay open, how close members must be, and how precise.
+    settings: function () {
+      var open = !!(status && status.activeSession);
+      return { state: 'settings', icon: 'sliders', smallMark: true, title: 'Check-in settings',
+        line: open
+          ? 'Distance and accuracy apply straight away. The time applies from the next check-in.'
+          : 'For every check-in, whoever starts it.',
+        say: settingsNotice, body: settingsEl(),
+        actions: [{ label: 'Save', primary: true, onClick: function (e) { saveSettings(e.currentTarget); } },
+          { label: 'Cancel', onClick: closeSettings }] };
     },
     adminStarted: function (data, pointFromLastKnown) {
       // Admins are not checked in automatically, so their own status must not read as done. If the
@@ -475,12 +504,19 @@
         view.hint = 'The check-in point is now where you’re standing.';
         justMoved = false;
       }
+      if (justSaved && !asking) {
+        view.hint = justSaved;
+        justSaved = '';
+      }
       if (!asking) {
         if (me && me.profile) {
           view.tag = profileTag();
           view.metaPlain = true; // so only the tappable pill looks like one
         }
         view.actions = [{ label: 'Done', onClick: closeApp }];
+        if (status && status.isAdmin) {
+          view.actions.unshift({ label: 'Check-in settings', onClick: function () { openSettings(function () { showCheckedIn(false); }); } });
+        }
         return view;
       }
       var p = me.profile;
@@ -491,7 +527,7 @@
           ? 'You’re checked in. One quick question so admins can tell who’s who.'
           : 'You’re checked in. The group list has changed, so please pick yours again.';
       }
-      view.say = hasGroups ? 'Which group are you in?' : 'Please confirm your full name.';
+      view.say = hasGroups ? 'Which group are you in?' : 'Please enter your rank and full name.';
       view.body = pickerEl();
       view.actions = [];
       if (!hasGroups) {
@@ -875,7 +911,7 @@
     render(views.failed(res, retry, kind));
   }
 
-  // ---------- group and full name ----------
+  // ---------- group, rank and full name ----------
 
   function rememberCheckin(data) {
     lastCheckin = { atText: data.atText, closesAtText: data.closesAtText };
@@ -891,11 +927,6 @@
     if (!me) return false;
     var p = me.profile;
     return !p || !p.fullName || (me.groups.length > 0 && !p.group);
-  }
-
-  function telegramName() {
-    var u = tg.initDataUnsafe && tg.initDataUnsafe.user;
-    return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : '';
   }
 
   function closePicker() {
@@ -935,17 +966,19 @@
     var firstTime = !p || !p.fullName;
     if (firstTime || picking) {
       var field = el('div', 'field');
-      var label = el('label', 'picker-q', 'Your full name');
+      var label = el('label', 'picker-q', 'Rank and full name');
       label.htmlFor = 'full-name';
       var input = el('input', 'input');
       input.id = 'full-name';
       input.type = 'text';
-      input.autocomplete = 'name';
+      input.autocomplete = 'off'; // a suggested contact name would leave out the rank
       input.autocapitalize = 'words';
+      input.placeholder = 'e.g. CPL Tan Wei Ming';
       input.spellcheck = false;
       input.maxLength = 60;
       input.setAttribute('enterkeyhint', 'done');
-      input.value = draftName !== null ? draftName : (p && p.fullName) || telegramName();
+      // Not prefilled from Telegram: display names are often nicknames, and never carry a rank.
+      input.value = draftName !== null ? draftName : (p && p.fullName) || '';
       if (nameInvalid) {
         input.setAttribute('aria-invalid', 'true');
         input.setAttribute('aria-describedby', 'name-error');
@@ -957,7 +990,7 @@
       field.appendChild(label);
       field.appendChild(input);
       if (nameInvalid) {
-        var err = el('p', 'field-error', 'Enter your full name first.');
+        var err = el('p', 'field-error', 'Enter your rank and full name first.');
         err.id = 'name-error';
         field.appendChild(err);
       }
@@ -1001,7 +1034,7 @@
       nameInvalid = true;
       pickerError = '';
       showCheckedIn(false);
-      statusEl.textContent = 'Enter your full name first.';
+      statusEl.textContent = 'Enter your rank and full name first.';
       focusFirst('#full-name');
       return;
     }
@@ -1047,6 +1080,145 @@
       showCheckedIn(false);
       statusEl.textContent = pickerError;
       focusFirst(nameInvalid ? '#full-name' : '#picker-error');
+    });
+  }
+
+  // ---------- check-in settings (admins) ----------
+
+  // The same ranges the server accepts (Settings.gs); it checks them again.
+  var SETTINGS = [
+    { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long check-in stays open', unit: 'minutes' },
+    { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be', unit: 'm from the check-in point' },
+    { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location accuracy needed', unit: 'm or better',
+      help: 'Phones less precise than this are asked to move outdoors and try again.' },
+  ];
+
+  function openSettings(back) {
+    settingsBack = back;
+    settingsDraft = {};
+    SETTINGS.forEach(function (f) { settingsDraft[f.name] = String(status[f.name] || ''); });
+    settingsErrors = {};
+    settingsNotice = '';
+    render(views.settings());
+  }
+
+  function closeSettings() {
+    var back = settingsBack;
+    settingsBack = null;
+    settingsDraft = null;
+    settingsErrors = {};
+    settingsNotice = '';
+    back();
+  }
+
+  function settingsEl() {
+    var box = el('div', 'picker settings');
+    if (settingsNotice) {
+      // Above the fields: below them it could sit behind the sticky Save button.
+      var notice = noticeEl(settingsNotice);
+      notice.id = 'settings-error';
+      notice.tabIndex = -1;
+      box.appendChild(notice);
+    }
+    SETTINGS.forEach(function (f, i) {
+      var field = el('div', 'field');
+      var label = el('label', 'picker-q', f.label);
+      label.htmlFor = f.id;
+      var row = el('div', 'unit-row');
+      var input = el('input', 'input');
+      input.id = f.id;
+      input.type = 'text';
+      input.inputMode = 'numeric';
+      input.pattern = '[0-9]*';
+      input.maxLength = 4;
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      input.setAttribute('enterkeyhint', i < SETTINGS.length - 1 ? 'next' : 'done');
+      input.value = settingsDraft[f.name];
+      var described = f.help ? [f.id + '-help'] : [];
+      if (settingsErrors[f.name]) {
+        input.setAttribute('aria-invalid', 'true');
+        described.unshift(f.id + '-error');
+      }
+      if (described.length) input.setAttribute('aria-describedby', described.join(' '));
+      input.addEventListener('input', function () { settingsDraft[f.name] = input.value; });
+      input.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var next = SETTINGS[i + 1] && document.getElementById(SETTINGS[i + 1].id);
+        if (next) next.focus(); else input.blur();
+      });
+      row.appendChild(input);
+      row.appendChild(el('span', 'unit', f.unit));
+      field.appendChild(label);
+      field.appendChild(row);
+      if (settingsErrors[f.name]) {
+        var err = el('p', 'field-error', settingsErrors[f.name]);
+        err.id = f.id + '-error';
+        field.appendChild(err);
+      }
+      if (f.help) {
+        var help = el('p', 'field-help', f.help);
+        help.id = f.id + '-help';
+        field.appendChild(help);
+      }
+      box.appendChild(field);
+    });
+    return box;
+  }
+
+  function wholeNumber(text) {
+    var t = String(text).replace(/\s+/g, '');
+    return /^\d{1,5}$/.test(t) ? Number(t) : NaN;
+  }
+
+  function saveSettings(button) {
+    if (savingSettings) return;
+    var values = {};
+    settingsErrors = {};
+    settingsNotice = '';
+    SETTINGS.forEach(function (f) {
+      var v = wholeNumber(settingsDraft[f.name]);
+      if (!(v >= f.min && v <= f.max)) settingsErrors[f.name] = 'Enter a whole number from ' + f.min + ' to ' + f.max + '.';
+      values[f.name] = v;
+    });
+    var bad = SETTINGS.filter(function (f) { return settingsErrors[f.name]; });
+    if (bad.length) {
+      render(views.settings());
+      statusEl.textContent = settingsErrors[bad[0].name];
+      focusFirst('#' + bad[0].id);
+      return;
+    }
+    savingSettings = true;
+    Array.prototype.forEach.call(document.querySelectorAll('.settings input, #actions button'), function (c) { c.disabled = true; });
+    button.classList.add('is-saving');
+    button.setAttribute('aria-busy', 'true');
+    var spin = el('span', 'spinner-sm');
+    spin.setAttribute('aria-hidden', 'true');
+    button.appendChild(spin);
+    statusEl.textContent = 'Saving…';
+    var id = renders;
+    setTimeout(function () {
+      if (savingSettings && renders === id) statusEl.textContent = 'Still saving. A slow connection can take a little while.';
+    }, TIMING.slowHint);
+    api('saveSettings', values).then(function (res) {
+      savingSettings = false;
+      if (res.code === 'SETTINGS_SAVED') {
+        haptic('success');
+        SETTINGS.forEach(function (f) { status[f.name] = res.data[f.name]; });
+        var keep = function (text) { return text.replace(/ /g, '\u00a0'); }; // "±100 m" never splits
+        justSaved = 'Saved: open ' + keep(res.data.sessionMinutes + ' min') + ', within ' + keep(metres(res.data.radiusM)) +
+          ', accuracy ' + keep('±' + metres(res.data.maxAccuracyM)) + ' or better.';
+        return closeSettings();
+      }
+      haptic('error');
+      if (res.code === 'AUTH_FAILED' || res.code === 'AUTH_EXPIRED') return render(views.auth(res, ''));
+      if (res.code === 'INVALID_SETTINGS' && res.data && res.data.errors) settingsErrors = res.data.errors;
+      else settingsNotice = res.code === 'NETWORK' || res.code === 'BUSY' ? 'Couldn’t save. Check your connection and try again.' : res.message;
+      render(views.settings());
+      var first = SETTINGS.filter(function (f) { return settingsErrors[f.name]; })[0];
+      statusEl.textContent = first ? settingsErrors[first.name] : settingsNotice;
+      focusFirst(first ? '#' + first.id : '#settings-error');
     });
   }
 
@@ -1353,6 +1525,7 @@
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/>',
     x: '<path d="M7 7l10 10"/><path d="M17 7 7 17"/>',
+    sliders: '<path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/>',
   };
 
   function el(tag, className, text) {
@@ -1363,7 +1536,7 @@
   }
 
   function markEl(view) {
-    var mark = el('div', 'mark' + (view.shake ? ' shake' : ''));
+    var mark = el('div', 'mark' + (view.shake ? ' shake' : '') + (view.smallMark ? ' is-small' : ''));
     if (view.tone) mark.setAttribute('data-tone', view.tone);
     if (view.spinner) {
       var spinner = el('div', 'spinner');
