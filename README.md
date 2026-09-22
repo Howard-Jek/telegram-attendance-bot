@@ -6,10 +6,11 @@ reads the phone's GPS and records the check-in in a Google Sheet, with:
 - server time;
 - the member's verified Telegram identity;
 - their location;
-- their full name and group.
+- their rank and full name, and group.
 
 An admin opens a check-in session from the app. The place where the admin is standing becomes
-the check-in point, and members must be within 150 m of it.
+the check-in point, and members must be within 150 m of it (admins can change this, and how long
+check-in stays open, in the app).
 
 There is no server to run. The backend is a Google Apps Script web app attached to the Sheet,
 and the Mini App is one static page on GitHub Pages.
@@ -41,8 +42,8 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 
 1. Type `/checkin` in the group, or tap the latest 📍 Check in button.
 2. Wait for the stamp that shows "You're on the list" and the time.
-3. The first time, confirm your full name and tap your group. It's remembered. Tap the pill
-   under the stamp to change either.
+3. The first time, type your rank and full name (e.g. "CPL Tan Wei Ming") and tap your group.
+   It's remembered. Tap the pill under the stamp to change either.
 
 **Admins** are the group's Telegram admins, plus anyone listed in `ADMIN_IDS`.
 
@@ -54,6 +55,17 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 5. When the session ends, the bot edits its message into the result, for example
    "Check-in closed at 11:02 · 23 checked in", followed by a line of counts per group.
    This happens within 5 minutes of closing.
+
+**Settings.** Admins can change three settings in the app: **Change settings** on the start
+screen, or **Check-in settings** after checking in.
+
+- **How long check-in stays open**, 1–720 minutes. This applies from the next session.
+- **How close members must be**, 10–5000 m. This applies straight away, including to a
+  session that's already open.
+- **Location accuracy needed**, 10–500 m. This also applies straight away.
+
+These are the Config tab's `SESSION_MINUTES`, `RADIUS_M` and `MAX_ACCURACY_M`, so you can also
+edit them there.
 
 **The group chat stays tidy.**
 
@@ -78,10 +90,10 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 |---|---|---|
 | **Config** | Settings (see below) | You. The bot fills in `GROUP_CHAT_ID`. |
 | **Sessions** | One row per session: who started it, times, check-in point, number checked in (updated every 5 minutes, final at close) | The bot |
-| **Log** | One row per check-in: time, Telegram name, location, distance, full name, group | The bot |
+| **Log** | One row per check-in: time, Telegram name, location, distance, rank and full name (`full_name`), group | The bot |
 | **Rejected** | Check-in attempts that were refused while a session was open, and why | The bot |
 | **Groups** | Your groups, one per row under the `group` header. Leave it empty to skip the group question. | You |
-| **Members** | Each member's saved full name and group | The bot. You can correct names and groups here. |
+| **Members** | Each member's saved rank and full name, and group | The bot. You can correct names and groups here. |
 
 **Safe to do**
 
@@ -115,9 +127,9 @@ fast:
 |---|---|---|
 | `GROUP_CHAT_ID` | *(blank)* | The connected Telegram group. The bot fills it in. Clear it to move the bot to another group. |
 | `MINI_APP_LINK` | *(blank)* | The Mini App's direct link from BotFather, e.g. `https://t.me/YourBot/checkin` |
-| `RADIUS_M` | 150 | How close to the check-in point members must be, in metres |
-| `MAX_ACCURACY_M` | 100 | The roughest GPS fix accepted, in metres. This also applies to the admin who sets the point. |
-| `SESSION_MINUTES` | 60 | How long a session stays open |
+| `RADIUS_M` | 150 | How close to the check-in point members must be, in metres. Admins can change it in the app. |
+| `MAX_ACCURACY_M` | 100 | The roughest GPS fix accepted, in metres. This also applies to the admin who sets the point. Admins can change it in the app. |
+| `SESSION_MINUTES` | 60 | How long a session stays open. Admins can change it in the app. |
 | `INITDATA_MAX_AGE_MIN` | 15 | How long an opened Mini App stays valid before members must reopen it |
 | `ADMIN_IDS` | *(blank)* | Optional. Comma-separated Telegram user IDs that may start sessions without being group admins. |
 
@@ -291,6 +303,10 @@ change automatically.
     away, or too rough).
   - People outside the group, or on desktop Telegram, are recorded without a location.
 - **Admins** get exact distances, and the Sheet keeps them; members only see rounded ones.
+- **Settings from the app** are limited to session length, distance and accuracy, within fixed
+  ranges. Only admins can change them. The group, `ADMIN_IDS` and the Mini App link can only be
+  changed in the Sheet. Each change is logged with the admin's Telegram ID (Apps Script →
+  Executions).
 
 ## Troubleshooting
 
@@ -344,7 +360,8 @@ apps-script/       the backend (pushed with clasp)
   Auth.gs            Telegram initData verification, admin check
   Sessions.gs        status, start, move the check-in point
   Checkin.gs         check-in rules and writes
-  Profile.gs         groups and full names
+  Profile.gs         groups, ranks and full names
+  Settings.gs        check-in settings admins change in the app
   Group.gs           the group's Check in button and the close job
   Webhook.gs         Telegram updates: /checkin, connecting the group, supergroup upgrades
   Telegram.gs        Bot API calls

@@ -235,7 +235,7 @@ The owner reopened two of the decisions above. This section overrides the table 
   - Sessions created before this change have no point and answer `NO_SITE`.
 - **Groups and full names.**
   - The owner lists groups on the **Groups** tab.
-  - After checking in, a member taps their group. The first time, they also confirm their full name, prefilled from Telegram.
+  - After checking in, a member taps their group. The first time, they also type their rank and full name (asked for by the owner; stored in the `full_name` column). It is not prefilled from Telegram, because display names are often nicknames and never carry a rank.
   - `saveProfile` stores both on the **Members** tab (one row per person, editable by admins) and on that person's Log row.
   - Later check-ins copy them onto the Log row automatically.
   - Only group members can save a profile, and the group must be on the Groups tab.
@@ -304,3 +304,10 @@ The owner reopened two of the decisions above. This section overrides the table 
     - **A timer race** could send an extra backup copy.
 
     Modelled result: half the crowd is in within about a minute, and the last person within about 100–120 s.
+- **Settings in the app (2026-09-22).** The owner asked for the session length and radius to be set from the app, like the check-in point.
+  - `saveSettings` (Settings.gs) sets `SESSION_MINUTES` (1–720), `RADIUS_M` (10–5000) and `MAX_ACCURACY_M` (10–500). The values must be whole numbers, and it saves all three or none.
+  - Only admins can use it (`checkAdmin_`, as for starting a session). It writes the Config tab under the script lock and moves the Config copy on, so the change applies to the next request.
+  - Distance and accuracy apply at once, including to an open session. The session length applies from the next session, because an open session's `closes_at` is already fixed.
+  - The group, `ADMIN_IDS` and `MINI_APP_LINK` are deliberately not settable from the app.
+  - `setConfigValues_` writes the last row of a key that appears twice, since `loadConfig_` reads the last one.
+  - The Mini App shows it as **Change settings** on the admin's start screen and **Check-in settings** on the admin's checked-in screen.
