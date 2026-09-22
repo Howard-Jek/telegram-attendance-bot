@@ -43,7 +43,8 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 1. Type `/checkin` in the group, or tap the latest 📍 Check in button.
 2. Wait for the stamp that shows "You're on the list" and the time.
 3. The first time, type your rank and full name (e.g. "CPL Tan Wei Ming") and tap your group.
-   It's remembered. Tap the pill under the stamp to change either.
+   It's remembered. Tap the pill under the stamp to change either. Names saved before the app
+   asked for a rank stay as they were: tap the pill to add it, or correct it on the Members tab.
 
 **Admins** are the group's Telegram admins, plus anyone listed in `ADMIN_IDS`.
 
@@ -56,13 +57,18 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
    "Check-in closed at 11:02 · 23 checked in", followed by a line of counts per group.
    This happens within 5 minutes of closing.
 
-**Settings.** Admins can change three settings in the app: **Change settings** on the start
-screen, or **Check-in settings** after checking in.
+**Settings.** Admins can change three settings in the app with **Check-in settings**. The button
+is on the start screen, on the checked-in screen, and on the "too far" and "not precise enough"
+screens, where a wrong limit is most likely to show.
 
 - **How long check-in stays open**, 1–720 minutes. This applies from the next session.
 - **How close members must be**, 10–5000 m. This applies straight away, including to a
   session that's already open.
-- **Location accuracy needed**, 10–500 m. This also applies straight away.
+- **How accurate a location must be**, 10–500 m. This also applies straight away. A higher
+  number lets more phones through, for example indoors.
+
+Only the values you change are saved, so two admins changing different settings don't undo each
+other.
 
 These are the Config tab's `SESSION_MINUTES`, `RADIUS_M` and `MAX_ACCURACY_M`, so you can also
 edit them there.

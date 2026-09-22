@@ -1124,7 +1124,7 @@ test('settings: every value must be a whole number in range, or nothing is saved
   const env = setup();
   const bad = [
     ['sessionMinutes', 0], ['sessionMinutes', 721], ['sessionMinutes', 1.5], ['sessionMinutes', '60'],
-    ['sessionMinutes', null], ['sessionMinutes', undefined],
+    ['sessionMinutes', null],
     ['radiusM', 9], ['radiusM', 5001], ['radiusM', -150], ['radiusM', 1e9], ['radiusM', true],
     ['maxAccuracyM', 9], ['maxAccuracyM', 501], ['maxAccuracyM', [100]], ['maxAccuracyM', { v: 100 }],
   ];
@@ -1158,6 +1158,7 @@ test('settings: saved as plain text like the rest of Config; a missing row is ad
   for (let r = 2; r <= cfg.getLastRow(); r++) {
     if (cfg.getRange(r, 1).getValue() === 'MAX_ACCURACY_M') cfg.getRange(r, 1, 1, 2).setValues([['', '']]);
   }
+  cfg.formats.clear(); // setup() pre-formats the column; the save must do it itself
   env.events.length = 0;
   saveSettings(env, ADMIN, SETTINGS);
   assert.equal(env.config('RADIUS_M'), '250');
@@ -1183,4 +1184,31 @@ test('settings: if the owner typed a key twice, the app changes the row that is 
   assert.equal(env.req('status', MEMBER).data.radiusM, 200);
   saveSettings(env, ADMIN, SETTINGS);
   assert.equal(env.req('status', MEMBER).data.radiusM, 250);
+});
+
+test('settings: only the values sent are changed (an admin with an old screen can\'t undo another\'s change)', () => {
+  const env = setup();
+  saveSettings(env, ADMIN2, { maxAccuracyM: 200 });
+  const r = saveSettings(env, ADMIN, { sessionMinutes: 45 });
+  assert.equal(r.code, 'SETTINGS_SAVED');
+  assert.deepEqual(r.data, { sessionMinutes: 45, radiusM: 150, maxAccuracyM: 200 }, 'the reply has all three, as they now are');
+  assert.deepEqual([env.config('SESSION_MINUTES'), env.config('RADIUS_M'), env.config('MAX_ACCURACY_M')], ['45', '150', '200']);
+  const none = saveSettings(env, ADMIN, {});
+  assert.equal(none.code, 'INVALID_SETTINGS');
+  assert.equal(env.config('SESSION_MINUTES'), '45');
+});
+
+test('settings: a late copy of an earlier save (same saveId) never undoes a newer save', () => {
+  const env = setup();
+  const first = { radiusM: 1500, saveId: 'save-aaaaaaaa' };
+  assert.equal(saveSettings(env, ADMIN, first).code, 'SETTINGS_SAVED');
+  assert.equal(saveSettings(env, ADMIN, { radiusM: 150, saveId: 'save-bbbbbbbb' }).code, 'SETTINGS_SAVED');
+  const late = saveSettings(env, ADMIN, first); // the app's backup copy of the first save, arriving last
+  assert.equal(late.code, 'SETTINGS_SAVED');
+  assert.equal(late.data.radiusM, 150, 'answers with the settings as they are');
+  assert.equal(env.config('RADIUS_M'), '150');
+  // Ids are only used when well-formed; a bad one is refused rather than ignored.
+  assert.equal(saveSettings(env, ADMIN, { radiusM: 300, saveId: 'x'.repeat(200) }).code, 'INVALID_SETTINGS');
+  assert.equal(saveSettings(env, ADMIN, { radiusM: 300, saveId: 42 }).code, 'INVALID_SETTINGS');
+  assert.equal(env.config('RADIUS_M'), '150');
 });

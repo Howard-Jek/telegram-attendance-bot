@@ -310,4 +310,13 @@ The owner reopened two of the decisions above. This section overrides the table 
   - Distance and accuracy apply at once, including to an open session. The session length applies from the next session, because an open session's `closes_at` is already fixed.
   - The group, `ADMIN_IDS` and `MINI_APP_LINK` are deliberately not settable from the app.
   - `setConfigValues_` writes the last row of a key that appears twice, since `loadConfig_` reads the last one.
-  - The Mini App shows it as **Change settings** on the admin's start screen and **Check-in settings** on the admin's checked-in screen.
+  - The Mini App shows **Check-in settings** to admins on the start screen, the checked-in screen, the ready screen, and the "too far" and "not precise enough" failures.
+  - *Review (2026-09-22), four reviewers plus a verifier per finding.* No security issues. Fixed:
+    - **Only changed values are sent.** The server treats a missing field as unchanged, so a screen opened before another admin's save can't undo it.
+    - **Each save carries a `saveId`,** which the app's backup copies reuse. A copy that arrives after its save was applied, perhaps after a newer save, doesn't write again.
+    - **Settings are reachable mid-session** from the failures where they matter.
+    - **An unconfirmed save or a demotion reloads on Cancel.**
+    - **Double taps and Telegram's back button are handled.** The app ignores taps on a screen's buttons in its first 350 ms, and the back arrow closes the form.
+    - **Focus and screen-reader fixes:** the unit is read with each field, and focus starts at the title.
+    - **The sticky bar gets a hairline** when content runs on beneath it.
+    - **Clearer copy** for the accuracy field.

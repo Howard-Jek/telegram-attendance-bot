@@ -11,14 +11,15 @@
     var html = await (await fetch('/web/index.html', { cache: 'no-store' })).text();
     var sdk = /<script src="https:\/\/telegram\.org\/js\/telegram-web-app\.js[^"]*"><\/script>/;
     if (!sdk.test(html)) throw new Error('telegram-web-app.js tag not found in index.html');
-    html = html.replace(sdk, '<script src="/tests/mini-app/scenarios.js"><\/script><script src="/tests/mini-app/mock-telegram.js"><\/script>');
+    var fresh = '?v=' + Date.now(); // never a cached copy of the mocks
+    html = html.replace(sdk, '<script src="/tests/mini-app/scenarios.js' + fresh + '"><\/script><script src="/tests/mini-app/mock-telegram.js' + fresh + '"><\/script>');
     var api = /var API_URL = '[^']*';/;
     if (!api.test(html)) throw new Error('API_URL constant not found in index.html');
     html = html.replace(api, "var API_URL = '" + (sc.apiUrl || 'https://script.google.com/macros/s/MOCK/exec') + "';");
     // Same behaviour, shorter waits, so scenarios run in seconds.
     var timing = /var TIMING = \{[\s\S]*?\};/;
     if (!timing.test(html)) throw new Error('TIMING constant not found in index.html');
-    html = html.replace(timing, 'var TIMING = { retryAfter: 150, busyBudget: 4000, request: 4000, hedgeSecond: 1200, hedgeThird: 2400, frameGrace: 300, failureGap: 100, location: 4000, telegramSilent: 300, grace: 400, browserLocation: 2000, freshFix: 1500, slowHint: 400 };');
+    html = html.replace(timing, 'var TIMING = { retryAfter: 150, busyBudget: 4000, request: 4000, hedgeSecond: 1200, hedgeThird: 2400, frameGrace: 300, failureGap: 100, location: 4000, telegramSilent: 300, grace: 400, browserLocation: 2000, freshFix: 1500, slowHint: 400, tapGuard: ' + (sc.tapGuard || 0) + ' };');
     // Simulate a large system font size (Android scales CSS font sizes).
     var scale = Number(params.get('fontScale') || sc.fontScale || 1);
     if (scale !== 1) {

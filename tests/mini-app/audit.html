@@ -19,11 +19,14 @@
     return false;
   }
 
+  // ?height=590 audits a short phone viewport (e.g. an iPhone SE inside Telegram).
+  var HEIGHT = Number(new URLSearchParams(location.search).get('height')) || 0;
+
   async function audit(src, name, theme, width) {
     var sc = SCENARIOS[name];
     var frame = document.createElement('iframe');
     frame.style.width = width + 'px';
-    frame.style.height = (width < 500 ? 740 : 800) + 'px';
+    frame.style.height = (HEIGHT || (width < 500 ? 740 : 800)) + 'px';
     frame.src = 'harness.html?scenario=' + encodeURIComponent(name) + '&theme=' + theme;
     document.body.appendChild(frame);
     var doc = function () { return frame.contentDocument; };

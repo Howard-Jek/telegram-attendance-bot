@@ -1,7 +1,8 @@
 /**
  * Groups and names. The owner lists the groups on the Groups tab; each member picks theirs
- * and gives their rank and full name once in the Mini App (kept in the full_name column). Both are kept on the Members tab (where an
- * admin can correct them) and copied onto every Log row, so the Log reads by real name and group.
+ * and gives their rank and full name once in the Mini App (kept in the full_name column). Both
+ * are kept on the Members tab (where an admin can correct them) and copied onto every Log row,
+ * so the Log reads by real name and group.
  */
 
 const MAX_NAME_CHARS_ = 60;

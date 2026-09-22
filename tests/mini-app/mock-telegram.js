@@ -150,6 +150,8 @@
   };
 
   var popupOpen = false;
+  var backHandlers = [];
+  log.backVisible = false;
   window.Telegram = {
     WebApp: {
       initData: sc.initData !== undefined ? sc.initData : 'user=%7B%22id%22%3A42%7D&auth_date=1790000000&hash=mock',
@@ -174,6 +176,15 @@
       HapticFeedback: { notificationOccurred: function () {} },
       openTelegramLink: function (url) { log.openedLinks.push(url); },
       LocationManager: lm,
+      BackButton: {
+        isVisible: false,
+        show: function () { this.isVisible = true; log.backVisible = true; },
+        hide: function () { this.isVisible = false; log.backVisible = false; },
+        onClick: function (h) { backHandlers.push(h); },
+        offClick: function (h) { backHandlers = backHandlers.filter(function (x) { return x !== h; }); },
+      },
     },
   };
+  // run.html presses Telegram's back arrow through this.
+  window.__pressBack = function () { backHandlers.forEach(function (h) { h(); }); };
 })();

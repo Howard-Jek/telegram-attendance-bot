@@ -38,6 +38,8 @@
     ['admin-settings-during-session', 'Settings while a check-in is open'],
     ['admin-checked-in-settings', 'Admin checked in: settings saved'],
     ['admin-settings-network', 'Settings: couldn’t save'],
+    ['admin-low-accuracy-settings', 'Admin: accuracy raised from a failure'],
+    ['admin-out-of-range-settings-cancel', 'Admin too far: settings offered'],
     ['admin-start-warning', 'Admin just started (with warning)'],
     ['admin-out-of-range-buttons', 'Admin too far: move the point'],
     ['admin-no-site', 'Admin: session without a point'],
@@ -49,6 +51,8 @@
     ['outside-telegram', 'Opened outside Telegram'],
   ];
   var theme = new URLSearchParams(location.search).get('theme') || 'light';
+  // ?size=360x660 previews a real phone's Mini App viewport (default 375x740).
+  var size = /^(\d+)x(\d+)$/.exec(new URLSearchParams(location.search).get('size') || '');
   var only = new URLSearchParams(location.search).get('only');
   if (only) SHOW = SHOW.filter(function (s) { return only.split(',').indexOf(s[0]) !== -1; });
   var nav = document.getElementById('themes');
@@ -102,6 +106,7 @@
     var frame = document.createElement('iframe');
     frame.title = s[1];
     frame.src = 'harness.html?scenario=' + s[0] + '&theme=' + theme;
+    if (size) { frame.style.width = size[1] + 'px'; frame.style.height = size[2] + 'px'; }
     fig.appendChild(cap);
     fig.appendChild(frame);
     grid.appendChild(fig);

@@ -57,6 +57,23 @@
         break;
       }
       (step.text || []).forEach(function (t) { if (text().indexOf(t) === -1) errors.push('step text missing: ' + t); });
+      (step.notText || []).forEach(function (t) { if (text().indexOf(t) !== -1) errors.push('step unexpected text: ' + t); });
+      if (step.waitText && !(await until(function () { return step.waitText.every(function (t) { return text().indexOf(t) !== -1; }); }, 8000))) {
+        errors.push('never showed ' + JSON.stringify(step.waitText) + ' (at ' + state() + ')');
+        break;
+      }
+      if (step.pause) await wait(step.pause);
+      if (step.back) { win().__pressBack(); await wait(30); }
+      if (step.quickClicks) {
+        // A double tap: the second tap lands on whatever button now sits under the finger.
+        var first = await until(function () { return buttons(doc()).indexOf(step.quickClicks[0]) !== -1 && state() !== 'loading'; }, 8000);
+        if (!first) { errors.push('no button ' + step.quickClicks[0] + ' (at ' + state() + ')'); break; }
+        step.quickClicks.forEach(function (lbl) {
+          var q = Array.prototype.find.call(doc().querySelectorAll('#actions button'), function (b) { return b.textContent === lbl; });
+          if (q) q.click();
+        });
+        await wait(30);
+      }
       if (step.fill) {
         var field = doc().querySelector(step.fill[0]);
         if (!field) { errors.push('no field ' + step.fill[0] + ' (at ' + state() + ')'); break; }
@@ -180,7 +197,14 @@
         var lastSet = sets[sets.length - 1];
         var gotSet = lastSet ? { sessionMinutes: lastSet.sessionMinutes, radiusM: lastSet.radiusM, maxAccuracyM: lastSet.maxAccuracyM } : null;
         if (JSON.stringify(gotSet) !== JSON.stringify(e.sentSettings)) errors.push('saved settings ' + JSON.stringify(gotSet));
+        if (!lastSet || !/^[A-Za-z0-9_-]{8,40}$/.test(lastSet.saveId || '')) errors.push('save without a valid saveId');
       }
+      if (e.oneSaveId) {
+        var ids = log.calls.filter(function (c) { return c.action === 'saveSettings'; }).map(function (c) { return c.saveId; });
+        if (ids.length < 2 || ids.some(function (id) { return id !== ids[0]; })) errors.push('copies of one save carry ids ' + JSON.stringify(ids));
+      }
+      if (e.enabled && doc().querySelector('#app button:disabled, #app input:disabled')) errors.push('controls left disabled');
+      if (e.backVisible !== undefined && log.backVisible !== e.backVisible) errors.push('back button visible: ' + log.backVisible);
       if (e.sentProfile) {
         var saves = log.calls.filter(function (c) { return c.action === 'saveProfile'; });
         var last = saves[saves.length - 1];

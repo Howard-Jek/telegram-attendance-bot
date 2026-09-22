@@ -107,6 +107,8 @@
     background: color-mix(in srgb, var(--danger-ink) 10%, var(--bg));
     text-align: left;
   }
+  .notice:focus { outline: none; }
+  .notice:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
   .notice svg { flex: none; width: 1em; height: 1em; margin-top: 0.25em; fill: none; stroke: var(--danger-ink); stroke-width: 2.25; stroke-linecap: round; }
   .placeholder { visibility: hidden; } /* keeps loading screens the same height, so the spinner doesn't jump */
   .outcome.is-unknown { color: var(--text); }
@@ -246,7 +248,8 @@
   /* Check-in settings (admins): a short number field with its unit beside it. */
   .unit-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--s3); row-gap: var(--s1); }
   .unit-row .input { width: 7.5rem; font-variant-numeric: tabular-nums; }
-  .unit { font-weight: 600; }
+  .unit { font-weight: 400; }
+  .input:disabled { opacity: 0.55; -webkit-text-fill-color: currentColor; } /* while saving: the same dimming as buttons */
   .field-help { margin: 0; font-size: var(--t-label); color: var(--muted); text-wrap: pretty; }
   .settings .input { scroll-margin-bottom: 10rem; } /* a focused field clears the sticky buttons */
   /* The saved group and name, tappable to change. */
@@ -284,6 +287,9 @@
     background: var(--bg);
   }
   .actions:empty { padding: 0 0 var(--s4); }
+  /* A hairline when content runs on under the bar, so a cut-off field reads as "scroll for more". */
+  .actions.is-covering { box-shadow: 0 -1px 0 color-mix(in srgb, var(--muted) 45%, transparent), 0 -14px 14px -14px color-mix(in srgb, var(--text) 30%, transparent); }
+  body[data-state="settings"] .actions { padding-top: var(--s3); }
   @media (max-height: 620px) {
     .app { padding-top: var(--s3); }
     .screen { gap: var(--s3); }
@@ -292,6 +298,7 @@
     .mark[data-tone="no"] { width: 96px; height: 96px; }
     .mark[data-tone="no"] svg { width: 40px; height: 40px; }
     .stamp.is-compact { font-size: calc(var(--t-stamp-compact) * 0.85); }
+    body[data-state="settings"] .mark { display: none; } /* a short phone: the fields matter more */
   }
   .btn {
     appearance: none;
@@ -363,6 +370,7 @@
     browserLocation: 20000,
     freshFix: 8000,        // the admin's fresh fix for the check-in point, before using Telegram's
     slowHint: 8000,
+    tapGuard: 350,         // taps on a screen's buttons this soon after it appears are the second half of a double tap
   };
   var PHONE_PLATFORMS = ['android', 'ios'];
   var APPROXIMATE_M = 1000; // accuracy this coarse means the phone shares an approximate location
@@ -389,11 +397,15 @@
   var draftName = null;    // what they typed, kept across re-renders
   var justMoved = false;   // an admin just moved the check-in point (said once on the next screen)
   var justSaved = '';      // the settings an admin just saved (said once on the next screen)
-  var settingsBack = null; // re-renders the screen the settings were opened from
+  var settingsBack = null; // {cancel, saved}: where the settings screen goes next
+  var settingsFrom = null;  // the values the form opened with, as text
   var settingsDraft = null; // {sessionMinutes, radiusM, maxAccuracyM} as typed
+  var settingsStale = false; // a save may have happened, or the admin was demoted: reload on Cancel
   var settingsErrors = {};  // field -> message
   var settingsNotice = '';
   var savingSettings = false;
+  var onBack = null;        // what Telegram's back button does on this screen (null: hidden)
+  var renderedAt = 0;
   var lastDistanceM = 0;   // the admin's distance from the point, for the Move confirmation
 
   // ---------- views ----------
@@ -453,13 +465,11 @@
     },
     adminIdle: function () {
       var mins = (status && status.sessionMinutes) || 60;
-      var hint = justSaved || 'Once started, a check-in can’t be ended early.';
-      justSaved = '';
+      var idle = function () { render(views.adminIdle()); };
       return { state: 'admin-idle', icon: 'flag', title: 'No check-in open',
         line: 'Start one where you’re standing. Members within ' + radiusText() + ' of you can check in for the next ' + mins + ' minutes.',
-        hint: hint,
-        actions: [{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession },
-          { label: 'Change settings', onClick: function () { openSettings(function () { render(views.adminIdle()); }); } }] };
+        hint: takeSaved() || 'Once started, a check-in can’t be ended early.',
+        actions: withSettings([{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }], idle, idle) };
     },
     // Admins only: how long check-ins stay open, how close members must be, and how precise.
     settings: function () {
@@ -467,8 +477,8 @@
       return { state: 'settings', icon: 'sliders', smallMark: true, title: 'Check-in settings',
         line: open
           ? 'Distance and accuracy apply straight away. The time applies from the next check-in.'
-          : 'For every check-in, whoever starts it.',
-        say: settingsNotice, body: settingsEl(),
+          : 'These apply to every check-in, whichever admin starts it.',
+        say: settingsNotice, body: settingsEl(), onBack: closeSettings,
         actions: [{ label: 'Save', primary: true, onClick: function (e) { saveSettings(e.currentTarget); } },
           { label: 'Cancel', onClick: closeSettings }] };
     },
@@ -481,6 +491,7 @@
         checkInAction.primary = false;
         actions = [{ label: 'Share check-in link', primary: true, onClick: function () { share(data.shareLink); } }, checkInAction];
       }
+      // No settings here: the next step is Check in, and its outcome (or the checked-in screen) offers them.
       return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
         line: 'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
         meta: 'Open until ' + data.closesAtText, notice: data.warning, actions: actions,
@@ -488,10 +499,12 @@
     },
     ready: function (line) {
       var s = status && status.activeSession;
-      return { state: 'ready', icon: 'pin', title: 'Check-in is open',
+      var view = { state: 'ready', icon: 'pin', title: 'Check-in is open',
         line: line || 'Tap Check in when you’re at the venue.',
         meta: line && s ? 'Open until ' + s.closesAtText : sessionMeta(), // the line already names the starter
-        actions: [{ label: 'Check in', primary: true, onClick: checkIn }] };
+        hint: takeSaved() };
+      view.actions = withSettings([{ label: 'Check in', primary: true, onClick: checkIn }], function () { render(view); });
+      return view;
     },
     // After the stamp: the group picker (first time, or on Change), else the saved group as a pill.
     checkedIn: function (atText, closesAtText, isNew) {
@@ -504,30 +517,27 @@
         view.hint = 'The check-in point is now where you’re standing.';
         justMoved = false;
       }
-      if (justSaved && !asking) {
-        view.hint = justSaved;
-        justSaved = '';
-      }
+      if (justSaved && !asking) view.hint = takeSaved();
       if (!asking) {
         if (me && me.profile) {
           view.tag = profileTag();
           view.metaPlain = true; // so only the tappable pill looks like one
         }
-        view.actions = [{ label: 'Done', onClick: closeApp }];
-        if (status && status.isAdmin) {
-          view.actions.unshift({ label: 'Check-in settings', onClick: function () { openSettings(function () { showCheckedIn(false); }); } });
-        }
+        var back = function () { showCheckedIn(false); };
+        view.actions = withSettings([{ label: 'Done', onClick: closeApp }], back, back);
         return view;
       }
       var p = me.profile;
       var hasGroups = me.groups.length > 0;
-      // Say up front that the check-in is done: the question is extra, not a condition.
+      var noName = !p || !p.fullName;
+      // Say up front that the check-in is done: the questions are extra, not a condition.
       if (!picking) {
-        view.line = !p || !p.fullName
-          ? 'You’re checked in. One quick question so admins can tell who’s who.'
-          : 'You’re checked in. The group list has changed, so please pick yours again.';
+        view.line = !noName ? 'You’re checked in. The group list has changed, so please pick yours again.'
+          : hasGroups ? 'You’re checked in. Add your rank and name, then pick your group.'
+            : 'You’re checked in. Add your rank and name so admins know who’s who.';
       }
-      view.say = hasGroups ? 'Which group are you in?' : 'Please enter your rank and full name.';
+      view.say = !hasGroups ? 'Please enter your rank and full name.'
+        : noName ? 'Enter your rank and full name, then pick your group.' : 'Which group are you in?';
       view.body = pickerEl();
       view.actions = [];
       if (!hasGroups) {
@@ -560,6 +570,7 @@
           '). Turn on Precise Location for Telegram in your phone’s settings, then try again.';
       } else if (res.code === 'LOW_ACCURACY' && d.accuracyM && d.maxAccuracyM) {
         line = 'Accuracy ±' + metres(d.accuracyM) + ' (needs ±' + metres(d.maxAccuracyM) + '). Move outdoors or near a window, then try again.';
+        if (admin && canChangeSettings()) line += ' If everyone here gets this, raise the accuracy limit in Check-in settings.';
       } else if (res.code === 'OUT_OF_RANGE' && admin && d.distanceM) {
         // An admin may just not have arrived yet, so Try again stays first; but if the check-in was
         // started in the wrong place, they can move it from here.
@@ -594,8 +605,11 @@
             : 'We couldn’t confirm the move. Try again.';
       }
       var no = kind === 'checkin' && !unknown; // the ✕ ring mirrors the stamp: check-ins only
-      return { state: 'failed', icon: no ? 'x' : 'alert', tone: no ? 'no' : 'bad', outcome: outcome, outcomeUnknown: unknown,
+      var view = { state: 'failed', icon: no ? 'x' : 'alert', tone: no ? 'no' : 'bad', outcome: outcome, outcomeUnknown: unknown,
         title: title, line: line, meta: sessionMeta(), actions: actions };
+      // Too far or too rough: an admin may decide the distance or accuracy is what's wrong.
+      if (res.code === 'OUT_OF_RANGE' || res.code === 'LOW_ACCURACY') view.actions = withSettings(actions, function () { render(view); });
+      return view;
     },
     auth: function (res, kind) {
       var no = kind === 'checkin';
@@ -643,6 +657,10 @@
       return render(views.outside());
     }
     if (tg.platform === 'ios') document.documentElement.classList.add('ios');
+    // Telegram's back arrow (and Android's back) leaves a sub-screen instead of closing the app.
+    if (hasBackButton()) tg.BackButton.onClick(function () { if (onBack) onBack(); });
+    window.addEventListener('scroll', markCovered, { passive: true });
+    window.addEventListener('resize', markCovered);
     if (!tg.initData) return render(views.outside());
     tg.ready();
     tg.expand();
@@ -1087,28 +1105,59 @@
 
   // The same ranges the server accepts (Settings.gs); it checks them again.
   var SETTINGS = [
-    { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long check-in stays open', unit: 'minutes' },
+    { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long a check-in stays open', unit: 'minutes' },
     { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be', unit: 'm from the check-in point' },
-    { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location accuracy needed', unit: 'm or better',
-      help: 'Phones less precise than this are asked to move outdoors and try again.' },
+    { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location must be accurate to within', unit: 'm',
+      help: 'A higher number lets more phones through. Raise it if members indoors are told their location isn’t precise enough.' },
   ];
+
+  // An older server sends no maxAccuracyM and has no settings to save.
+  function canChangeSettings() {
+    return !!(status && status.isAdmin === true && typeof status.maxAccuracyM === 'number');
+  }
+
+  // Adds "Check-in settings" (last) to an admin's actions. cancel re-shows this screen; after a
+  // save, saved (default: reload, since the numbers on this screen may be out of date).
+  function withSettings(actions, cancel, saved) {
+    if (!canChangeSettings()) return actions;
+    return actions.concat([{ label: 'Check-in settings', onClick: function () {
+      openSettings({ cancel: cancel, saved: saved || function () { loadStatus(false); } });
+    } }]);
+  }
+
+  // The "Saved" line, said once on the next screen.
+  function takeSaved() {
+    var text = justSaved;
+    justSaved = '';
+    return text;
+  }
 
   function openSettings(back) {
     settingsBack = back;
+    settingsFrom = {};
     settingsDraft = {};
-    SETTINGS.forEach(function (f) { settingsDraft[f.name] = String(status[f.name] || ''); });
+    SETTINGS.forEach(function (f) {
+      settingsFrom[f.name] = typeof status[f.name] === 'number' ? String(status[f.name]) : '';
+      settingsDraft[f.name] = settingsFrom[f.name];
+    });
     settingsErrors = {};
     settingsNotice = '';
+    settingsStale = false;
     render(views.settings());
+    focusFirst('#screen .title'); // start at the top of the form, not on Save below it
   }
 
-  function closeSettings() {
+  // saved: true after a save went through; otherwise Cancel (or back).
+  function closeSettings(saved) {
     var back = settingsBack;
+    if (!back || savingSettings) return;
     settingsBack = null;
-    settingsDraft = null;
+    settingsDraft = settingsFrom = null;
     settingsErrors = {};
     settingsNotice = '';
-    back();
+    if (saved === true) back.saved();
+    else if (settingsStale) loadStatus(false); // the numbers (or admin rights) may have changed
+    else back.cancel();
   }
 
   function settingsEl() {
@@ -1140,7 +1189,8 @@
         input.setAttribute('aria-invalid', 'true');
         described.unshift(f.id + '-error');
       }
-      if (described.length) input.setAttribute('aria-describedby', described.join(' '));
+      described.splice(settingsErrors[f.name] ? 1 : 0, 0, f.id + '-unit'); // "150, m from the check-in point"
+      input.setAttribute('aria-describedby', described.join(' '));
       input.addEventListener('input', function () { settingsDraft[f.name] = input.value; });
       input.addEventListener('keydown', function (e) {
         if (e.key !== 'Enter') return;
@@ -1149,7 +1199,9 @@
         if (next) next.focus(); else input.blur();
       });
       row.appendChild(input);
-      row.appendChild(el('span', 'unit', f.unit));
+      var unit = el('span', 'unit', f.unit);
+      unit.id = f.id + '-unit';
+      row.appendChild(unit);
       field.appendChild(label);
       field.appendChild(row);
       if (settingsErrors[f.name]) {
@@ -1174,14 +1226,20 @@
 
   function saveSettings(button) {
     if (savingSettings) return;
+    // Only what the admin changed is sent, so an old screen can't undo another admin's change
+    // (or a value the owner typed in the Sheet that the app wouldn't accept).
     var values = {};
+    var changed = 0;
     settingsErrors = {};
     settingsNotice = '';
     SETTINGS.forEach(function (f) {
+      if (String(settingsDraft[f.name]).trim() === settingsFrom[f.name]) return;
       var v = wholeNumber(settingsDraft[f.name]);
       if (!(v >= f.min && v <= f.max)) settingsErrors[f.name] = 'Enter a whole number from ' + f.min + ' to ' + f.max + '.';
       values[f.name] = v;
+      changed++;
     });
+    if (!changed) return closeSettings();
     var bad = SETTINGS.filter(function (f) { return settingsErrors[f.name]; });
     if (bad.length) {
       render(views.settings());
@@ -1201,20 +1259,29 @@
     setTimeout(function () {
       if (savingSettings && renders === id) statusEl.textContent = 'Still saving. A slow connection can take a little while.';
     }, TIMING.slowHint);
+    // One id per save, shared by the app's backup copies of it, so a late copy can't undo a newer save.
+    values.saveId = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     api('saveSettings', values).then(function (res) {
       savingSettings = false;
       if (res.code === 'SETTINGS_SAVED') {
         haptic('success');
         SETTINGS.forEach(function (f) { status[f.name] = res.data[f.name]; });
         var keep = function (text) { return text.replace(/ /g, '\u00a0'); }; // "±100 m" never splits
-        justSaved = 'Saved: open ' + keep(res.data.sessionMinutes + ' min') + ', within ' + keep(metres(res.data.radiusM)) +
-          ', accuracy ' + keep('±' + metres(res.data.maxAccuracyM)) + ' or better.';
-        return closeSettings();
+        // Tied to what the next screen shows: an open check-in keeps its closing time.
+        justSaved = status.activeSession
+          ? 'Settings saved. Distance and accuracy apply now; the next check-in will stay open ' + keep(res.data.sessionMinutes + ' minutes') + '.'
+          : 'Settings saved. Locations must be accurate to within ' + keep('±' + metres(res.data.maxAccuracyM)) + '.';
+        closeSettings(true);
+        focusFirst('#screen .title'); // the Save button focus went with the old screen
+        return;
       }
       haptic('error');
       if (res.code === 'AUTH_FAILED' || res.code === 'AUTH_EXPIRED') return render(views.auth(res, ''));
-      if (res.code === 'INVALID_SETTINGS' && res.data && res.data.errors) settingsErrors = res.data.errors;
-      else settingsNotice = res.code === 'NETWORK' || res.code === 'BUSY' ? 'Couldn’t save. Check your connection and try again.' : res.message;
+      if (res.code === 'NETWORK' || res.code === 'NOT_ADMIN') settingsStale = true;
+      if (res.code === 'INVALID_SETTINGS' && res.data && res.data.errors && Object.keys(res.data.errors).length) settingsErrors = res.data.errors;
+      else if (res.code === 'NETWORK') settingsNotice = 'Couldn’t confirm the save. Check your connection and try again.';
+      else if (res.code === 'BUSY') settingsNotice = 'Busy right now. Try again in a moment.';
+      else settingsNotice = res.message;
       render(views.settings());
       var first = SETTINGS.filter(function (f) { return settingsErrors[f.name]; })[0];
       statusEl.textContent = first ? settingsErrors[first.name] : settingsNotice;
@@ -1485,6 +1552,16 @@
 
   // ---------- Telegram helpers ----------
 
+  function hasBackButton() {
+    return !!(tg && tg.BackButton && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1'));
+  }
+
+  function setBack(fn) {
+    onBack = fn || null;
+    if (!hasBackButton()) return;
+    try { if (onBack) tg.BackButton.show(); else tg.BackButton.hide(); } catch (e) { /* unsupported client */ }
+  }
+
   function confirmDialog(message) {
     return new Promise(function (resolve) {
       if (message.length > 256) message = message.slice(0, 255) + '…'; // Telegram refuses longer popups
@@ -1611,10 +1688,13 @@
     if (view.hint || view.reserve) screenEl.appendChild(el('p', 'hint' + (view.hint ? '' : ' placeholder'), view.hint || '\u00a0'));
     clear(actionsEl);
     var primary = null;
+    renderedAt = Date.now();
+    setBack(view.onBack);
     (view.actions || []).forEach(function (a) {
       var b = el('button', 'btn ' + (a.primary ? 'btn-primary' : 'btn-secondary'), a.label);
       b.type = 'button';
-      b.addEventListener('click', a.onClick);
+      // The second tap of a double tap would land on whatever button replaced the first one.
+      b.addEventListener('click', function (e) { if (Date.now() - renderedAt >= TIMING.tapGuard) a.onClick(e); });
       actionsEl.appendChild(b);
       if (a.primary && !primary) primary = b;
     });
@@ -1622,6 +1702,7 @@
     statusEl.textContent = answer + view.title + (view.line ? '. ' + view.line : '') + (view.say ? ' ' + view.say : '') +
       (view.hint && view.state !== 'loading' ? ' ' + view.hint : '');
     if (hadFocus) (primary || title).focus();
+    markCovered();
     if (view.state === 'loading') {
       // Slow venue Wi-Fi, a slow GPS fix or an Apps Script cold start: say it is still working.
       setTimeout(function () {
@@ -1636,6 +1717,12 @@
         }
       }, TIMING.slowHint);
     }
+  }
+
+  function markCovered() {
+    var last = screenEl.lastElementChild;
+    var covered = !!last && !!actionsEl.firstChild && last.getBoundingClientRect().bottom > actionsEl.getBoundingClientRect().top + 1;
+    actionsEl.classList.toggle('is-covering', covered);
   }
 
   // ---------- colours: keep the user's theme, but never below WCAG AA ----------
