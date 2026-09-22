@@ -24,6 +24,7 @@ function tgCall_(token, method, params) {
     // UrlFetchApp error messages can include the request URL, which contains the token.
     throw new Error('Telegram ' + method + ' request failed: ' + redactSecrets_(String(err && err.message)));
   }
+  perfMark_('tg.' + method);
   let body = null;
   try {
     body = JSON.parse(resp.getContentText());

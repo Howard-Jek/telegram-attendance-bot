@@ -41,6 +41,7 @@ class SetupError_ extends Error {
 function doPost(e) {
   openedSpreadsheet_ = null;
   if (e && e.parameter && e.parameter.hook !== undefined) return handleWebhook_(e);
+  perfBegin_('api');
   let res;
   try {
     res = handleRequest_(e);
@@ -48,7 +49,9 @@ function doPost(e) {
     console.error('doPost: ' + redactSecrets_(err && err.stack ? err.stack : String(err)));
     const isSetup = err && err.name === 'SetupError';
     res = reply_(false, 'SERVER_ERROR', isSetup ? err.message : MESSAGES_.SERVER_ERROR);
+    perfNote_('error', redactSecrets_(String(err && err.message)).slice(0, 300));
   }
+  perfEnd_(res.code);
   return ContentService.createTextOutput(JSON.stringify(res)).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -63,12 +66,22 @@ function handleRequest_(e) {
   if (!Object.prototype.hasOwnProperty.call(ACTIONS_, action)) {
     return reply_(false, 'BAD_REQUEST', MESSAGES_.BAD_REQUEST);
   }
+  if (PERF_) {
+    PERF_.label = action;
+    perfNote_('attempt', body.attempt);
+    perfNote_('sinceClientSentMs', typeof body.sentAt === 'number' ? Date.now() - body.sentAt : null);
+    if (body.clientMs) perfNote_('client', body.clientMs);
+    if (Array.isArray(body.diag) && body.diag.length) perfNote_('clientFailures', body.diag.slice(0, 5));
+  }
 
   const cfg = loadConfig_();
+  perfMark_('config');
   assertConfig_(cfg, ['INITDATA_MAX_AGE_MIN']);
   const token = botToken_();
   const auth = verifyInitData_(body.initData, token, cfg.initDataMaxAgeMin, now_().getTime());
+  perfMark_('auth');
   if (!auth.ok) return reply_(false, auth.code, MESSAGES_[auth.code]);
+  perfNote_('user', auth.user.id);
 
   const ctx = { cfg: cfg, token: token, user: auth.user };
   return ACTIONS_[action](ctx, body);
@@ -91,11 +104,14 @@ function now_() {
  */
 function withScriptLock_(fn) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(LOCK_WAIT_MS_)) return null;
+  const got = lock.tryLock(LOCK_WAIT_MS_);
+  perfMark_(got ? 'locked' : 'lockBusy');
+  if (!got) return null;
   try {
     return fn();
   } finally {
     SpreadsheetApp.flush(); // commit writes before the next request can take the lock
+    perfMark_('flushed');
     lock.releaseLock();
   }
 }

@@ -951,3 +951,26 @@ test('cache: a session edited by hand in the Sheet is picked up at the next clos
   assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN', 'check-ins always read the Sheet under the lock');
 });
 
+
+// ---------- temporary diagnostics (Perf.gs) ----------
+
+test('perf: each Mini App request logs its step timings and the failures the phone reported', () => {
+  const env = setup();
+  env.eval('PERF_ON_ = true');
+  env.start(ADMIN);
+  env.req('checkin', MEMBER, { location: ONSITE, attempt: 2, sentAt: env.nowMs - 1500, diag: [{ action: 'checkin', why: 'timeout', ms: 30000 }] });
+  const rows = env.rows('Perf');
+  assert.deepEqual(rows.map((r) => [r[1], r[2]]), [['startSession', 'SESSION_STARTED'], ['checkin', 'CHECKED_IN']]);
+  assert.match(rows[1][4], /config=\d+ .*auth=\d+ .*locked=\d+ .*flushed=\d+/);
+  const details = JSON.parse(rows[1][5]);
+  assert.equal(details.attempt, 2);
+  assert.equal(details.clientFailures[0].why, 'timeout');
+  assert.ok(!JSON.stringify(rows).includes(TOKEN), 'no token in the diagnostics');
+});
+
+test('perf: a failing Perf write never breaks the request', () => {
+  const env = setup();
+  env.eval('PERF_ON_ = true');
+  env.ss.insertSheet = () => { throw new Error('quota'); };
+  assert.equal(env.req('status', MEMBER).code, 'OK');
+});

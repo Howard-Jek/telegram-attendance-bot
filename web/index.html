@@ -737,7 +737,10 @@
     flow = purpose;
     render(views.loading('Getting your location…', 'If Telegram asks, allow location access.',
       'Still looking for your location. Check that Location is on.'));
+    var started = Date.now();
     (purpose === 'checkin' ? getLocation() : freshLocation()).then(function (fix) {
+      clientMs['location.' + purpose] = Date.now() - started;
+      clientMs.locationSource = fix.source + (fix.fallback ? '-fallback' : '');
       denials = 0;
       onFix(fix);
     }, function (err) {
@@ -799,6 +802,7 @@
     var fromOpenCheckIn = tg.initDataUnsafe && tg.initDataUnsafe.start_param === 'open';
     if (!fromOpenCheckIn || !lm || !tg.isVersionAtLeast || !tg.isVersionAtLeast('8.0')) return null;
     var early = { settled: false, promise: null };
+    var started = Date.now();
     early.promise = new Promise(function (resolve) {
       function go() {
         if (!lm.isLocationAvailable || !lm.isAccessGranted) return resolve(null);
@@ -811,6 +815,8 @@
       }
     }).then(function (outcome) {
       early.settled = true;
+      clientMs['location.early'] = Date.now() - started;
+      clientMs.earlyOutcome = !outcome ? 'not started' : outcome.fix ? 'fix' : 'error:' + outcome.error.kind;
       return outcome;
     });
     return early;
@@ -1030,25 +1036,47 @@
 
   // ---------- backend ----------
 
+  // TEMPORARY diagnostics (2026-09-22): how long each step took on this phone, and any request
+  // that failed, sent along with the next request so the server can log it (Perf tab).
+  var clientMs = {};
+  var diagQueue = [];
+  var pageStart = Date.now();
+
   // text/plain keeps this a CORS "simple request" (no preflight, which Apps Script can't answer).
   function api(action, extra, isRetry) {
     var body = { action: action, initData: tg.initData, platform: tg.platform };
     if (extra) for (var k in extra) body[k] = extra[k];
+    body.sentAt = Date.now();
+    body.attempt = isRetry ? 2 : 1;
+    clientMs.sincePageOpen = body.sentAt - pageStart;
+    body.clientMs = clientMs;
+    if (diagQueue.length) body.diag = diagQueue.splice(0, 5);
+    var started = Date.now();
+    var aborted = false;
+    var httpStatus = 0;
+    var text = '';
     var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
-    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, TIMING.request) : null;
+    var timer = ctrl ? setTimeout(function () { aborted = true; ctrl.abort(); }, TIMING.request) : null;
     return fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(body),
       signal: ctrl ? ctrl.signal : undefined,
     })
-      .then(function (r) { return r.json(); })
+      .then(function (r) { httpStatus = r.status; return r.text(); })
+      .then(function (t) { text = t; return JSON.parse(t); })
       .catch(function () { return null; })
       .then(function (res) {
         if (timer) clearTimeout(timer);
+        var ms = Date.now() - started;
+        clientMs[action + (isRetry ? '#2' : '')] = ms;
         if (!res || typeof res.code !== 'string') {
           // Offline, timed out, or Apps Script answered with an HTML error page (e.g. overloaded).
+          diagQueue.push({ action: action, attempt: body.attempt, ms: ms, status: httpStatus,
+            why: aborted ? 'timeout' : text ? 'unreadable' : 'fetch failed', start: text.slice(0, 120) });
           res = { ok: false, code: 'NETWORK', message: 'Check your connection and try again.' };
+        } else if (res.code === 'BUSY') {
+          diagQueue.push({ action: action, attempt: body.attempt, ms: ms, why: 'BUSY' });
         }
         if ((res.code === 'BUSY' || res.code === 'NETWORK') && !isRetry) {
           if (current === 'loading') setTitle('Trying again…');

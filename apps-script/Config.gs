@@ -140,6 +140,7 @@ function spreadsheet_() {
   if (!openedSpreadsheet_) {
     const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
     openedSpreadsheet_ = id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
+    perfMark_('sheetOpen');
     if (!openedSpreadsheet_) throw new SetupError_('The bot is not set up yet (SPREADSHEET_ID missing). The owner needs to run setup().');
   }
   return openedSpreadsheet_;
