@@ -175,6 +175,8 @@
       },
       HapticFeedback: { notificationOccurred: function () {} },
       openTelegramLink: function (url) { log.openedLinks.push(url); },
+      enableClosingConfirmation: function () { log.closingConfirmation = true; },
+      disableClosingConfirmation: function () { log.closingConfirmation = false; },
       LocationManager: lm,
       BackButton: {
         isVisible: false,

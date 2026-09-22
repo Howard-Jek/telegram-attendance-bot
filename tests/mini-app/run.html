@@ -207,6 +207,7 @@
       }
       if (e.enabled && doc().querySelector('#app button:disabled, #app input:disabled')) errors.push('controls left disabled');
       if (e.backVisible !== undefined && log.backVisible !== e.backVisible) errors.push('back button visible: ' + log.backVisible);
+      if (e.closingConfirmation !== undefined && !!log.closingConfirmation !== e.closingConfirmation) errors.push('closing confirmation: ' + log.closingConfirmation);
       if (e.sentProfile) {
         var saves = log.calls.filter(function (c) { return c.action === 'saveProfile'; });
         var last = saves[saves.length - 1];

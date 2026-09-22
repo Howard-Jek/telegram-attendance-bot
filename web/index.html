@@ -328,6 +328,7 @@
   .btn:disabled { cursor: default; opacity: 0.55; }
   .btn.is-saving { opacity: 1; }
   .btn .spinner-sm { margin-left: var(--s2); }
+  .btn-primary .spinner-sm { border-color: color-mix(in srgb, currentColor 35%, transparent); border-top-color: currentColor; } /* the accent would vanish on the accent */
   @media (hover: hover) { .btn:not(:disabled):hover { filter: brightness(0.9); } }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -408,7 +409,7 @@
   var nameInvalid = false;
   var draftName = null;    // what they typed, kept across re-renders
   var justMoved = false;   // an admin just moved the check-in point (said once on the next screen)
-  var justSaved = '';      // the settings an admin just saved (said once on the next screen)
+  var justSaved = null;    // {sent, now}: the settings an admin just saved (said once on the next screen)
   var settingsBack = null; // {cancel, saved}: where the settings screen goes next
   var settingsFrom = null;  // the values the form opened with, as text
   var settingsDraft = null; // {sessionMinutes, radiusM, maxAccuracyM} as typed
@@ -479,11 +480,10 @@
     adminIdle: function () {
       var mins = (status && status.sessionMinutes) || 60;
       var idle = function () { render(views.adminIdle()); };
-      var warning = 'Once started, a check-in can’t be ended early.';
-      var saved = takeSaved();
       return { state: 'admin-idle', icon: 'flag', title: 'No check-in open',
         line: 'Start one where you’re standing. Members within ' + radiusText() + ' of you can check in for the next ' + mins + ' minutes.',
-        hint: saved ? saved + ' ' + warning : warning,
+        meta: takeSaved(true), // "Saved." as a result, beside the numbers it changed
+        hint: 'Once started, a check-in can’t be ended early.',
         actions: withSettings([{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }], idle, idle) };
     },
     // Admins only: how long check-ins stay open, how close members must be, and how precise.
@@ -1124,7 +1124,7 @@
 
   // The same ranges the server accepts (Settings.gs); it checks them again.
   var SETTINGS = [
-    { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long a check-in stays open', unit: 'minutes' },
+    { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long a check\u2011in stays open', unit: 'minutes' },
     { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be to the check\u2011in point', unit: 'm' }, // "check-in" never splits
     { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location must be accurate to within', unit: 'm',
       help: 'A higher number lets more phones through. Raise it if members indoors are told their location isn’t precise enough.' },
@@ -1146,10 +1146,11 @@
   }
 
   // The "Saved" line, said once on the next screen.
-  function takeSaved() {
-    var text = justSaved;
-    justSaved = '';
-    return text;
+  // onIdle: the start screen already shows the new distance and time, so only accuracy is repeated there.
+  function takeSaved(onIdle) {
+    var saved = justSaved;
+    justSaved = null;
+    return saved ? savedLine(saved.sent, saved.now, onIdle) : '';
   }
 
   function openSettings(back) {
@@ -1241,18 +1242,18 @@
   }
 
   // Says what changed, in terms of the screen it appears on: an open check-in keeps its closing time.
-  function savedLine(sent, now) {
+  function savedLine(sent, now, onIdle) {
     var keep = function (text) { return text.replace(/ /g, '\u00a0'); }; // "300 m" never splits
     var m = function (n) { return keep(n.toLocaleString('en-US') + ' m'); }; // exactly as typed, not rounded to km
     var parts = [];
-    if (sent.radiusM !== undefined) parts.push('Members can now check in within ' + m(now.radiusM) + '.');
+    if (sent.radiusM !== undefined && !onIdle) parts.push('Members can now check in within ' + m(now.radiusM) + '.');
     if (sent.maxAccuracyM !== undefined) parts.push('Locations now need to be accurate to within ' + m(now.maxAccuracyM) + '.');
-    if (sent.sessionMinutes !== undefined) {
+    if (sent.sessionMinutes !== undefined && !onIdle) {
       var s = status.activeSession;
       parts.push(s ? 'This check-in still closes at ' + s.closesAtText + '; the next one will stay open ' + keep(now.sessionMinutes + ' minutes') + '.'
         : 'Check-ins now stay open ' + keep(now.sessionMinutes + ' minutes') + '.');
     }
-    return 'Saved. ' + parts.join(' ');
+    return parts.length ? 'Saved. ' + parts.join(' ') : 'Saved.';
   }
 
   function wholeNumber(text) {
@@ -1284,6 +1285,9 @@
       focusFirst('#' + bad[0].id);
       return;
     }
+    // A fresh form (no error from the last attempt beside the spinner), then everything held still.
+    render(views.settings());
+    button = actionsEl.querySelector('.btn-primary');
     savingSettings = true;
     Array.prototype.forEach.call(document.querySelectorAll('.settings input, #actions button'), function (c) { c.disabled = true; });
     button.classList.add('is-saving');
@@ -1293,14 +1297,14 @@
     button.appendChild(spin);
     statusEl.textContent = 'Saving…';
     setBack(null); // hidden, not dead, while it can't be used
+    closingGuard(true); // and closing the app mid-save asks first
     var id = renders;
     setTimeout(function () {
       if (!savingSettings || renders !== id) return;
-      var text = 'Still saving. If lots of people are checking in, this can take up to half a minute.';
-      var wait = el('p', 'field-help', text);
-      wait.id = 'settings-wait';
-      var form = screenEl.querySelector('.settings');
-      if (form) form.insertBefore(wait, form.firstChild);
+      // In place of the intro line, so nothing on the form moves.
+      var text = 'Still saving. If lots of people are checking in, this can take up to a minute.';
+      var line = screenEl.querySelector('.line');
+      if (line) line.textContent = text;
       statusEl.textContent = text;
     }, TIMING.slowHint);
     // One id per save, shared by the app's backup copies of it, so a late copy can't undo a newer save.
@@ -1308,10 +1312,11 @@
     var sent = values;
     api('saveSettings', values, 0, TIMING.settingsBudget).then(function (res) {
       savingSettings = false;
+      closingGuard(false);
       if (res.code === 'SETTINGS_SAVED') {
         haptic('success');
         SETTINGS.forEach(function (f) { status[f.name] = res.data[f.name]; });
-        justSaved = savedLine(sent, res.data);
+        justSaved = { sent: sent, now: res.data };
         closeSettings(true);
         focusFirst('#screen .title'); // the Save button focus went with the old screen
         return;
@@ -1598,6 +1603,13 @@
 
   function hasBackButton() {
     return !!(tg && tg.BackButton && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1'));
+  }
+
+  function closingGuard(on) {
+    try {
+      if (!tg.isVersionAtLeast || !tg.isVersionAtLeast('6.2')) return;
+      if (on) tg.enableClosingConfirmation(); else tg.disableClosingConfirmation();
+    } catch (e) { /* unsupported client */ }
   }
 
   function setBack(fn) {
