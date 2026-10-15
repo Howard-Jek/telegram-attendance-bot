@@ -57,13 +57,21 @@ function handleStartSession_(ctx, body) {
     };
     const sheet = sheet_(SHEETS_.SESSIONS);
     sheet.appendRow([session.id, Number(user.id), textCell_(user.name), session.opensAt, session.closesAt,
-      '', 'open', 0, site.lat, site.lng, round1_(site.accuracy)]);
+      '', 'open', 0, round1_(site.accuracy)]);
     session.row = sheet.getLastRow();
     session.status = 'open';
     session.count = 0;
-    session.site = { lat: site.lat, lng: site.lng };
+    saveSite_(session.id, site);
     cacheSessions_(sessions.concat([session]), now.getTime());
     startCheckinsCopy_(session, now);
+    // Its tab, made now (under the lock, so the close job can't make a second one) and before the
+    // group is told, so nobody is queueing behind it yet. A failure must not stop the check-in.
+    try {
+      writeSessionTab_(ensureSessionTab_(session), session, [], readGroups_(), false);
+    } catch (err) {
+      console.warn('Could not make the session tab for ' + session.id + ' (the close job will try again): ' +
+        redactSecrets_(String(err && err.message)));
+    }
     return { session: session };
   });
 
@@ -110,14 +118,47 @@ function handleMoveSite_(ctx, body) {
     const session = findActiveSession_(sessions, nowMs);
     if (!session) return reply_(false, 'NO_ACTIVE_SESSION', MESSAGES_.NO_ACTIVE_SESSION);
     if (!isStarter_(session, ctx.user)) return notStarter_('NOT_STARTER', session, 'move its check-in point');
-    sheet_(SHEETS_.SESSIONS).getRange(session.row, SESSION_COL_.SITE_LAT, 1, 3)
-      .setValues([[site.lat, site.lng, round1_(site.accuracy)]]);
-    session.site = { lat: site.lat, lng: site.lng };
+    saveSite_(session.id, site);
+    sheet_(SHEETS_.SESSIONS).getRange(session.row, SESSION_COL_.SITE_ACCURACY).setValue(round1_(site.accuracy));
     cacheSessions_(sessions, nowMs);
     console.info('Session ' + session.id + ' check-in point moved by user ' + ctx.user.id);
     return reply_(true, 'SITE_MOVED', 'The check-in point is now where you are.', Object.assign(sessionView_(session), { startedByMe: true }));
   });
   return result || reply_(false, 'BUSY', MESSAGES_.BUSY);
+}
+
+// ---------- the check-in point, kept out of the Sheet ----------
+
+// Script Property per open session: SITE:<session id> -> {"lat": ..., "lng": ...}. Only the
+// script (its owner) can read Script Properties; the close job deletes a point once its session
+// can no longer take check-ins, so no record of where anyone stood is kept.
+const SITE_PROP_PREFIX_ = 'SITE:';
+
+/** Call with the script lock held. */
+function saveSite_(sessionId, site) {
+  PropertiesService.getScriptProperties().setProperty(SITE_PROP_PREFIX_ + sessionId,
+    JSON.stringify({ lat: site.lat, lng: site.lng }));
+}
+
+/** {lat, lng}, or null if the session has no check-in point (or it can't be read). */
+function readSite_(sessionId) {
+  try {
+    const v = JSON.parse(PropertiesService.getScriptProperties().getProperty(SITE_PROP_PREFIX_ + sessionId) || 'null');
+    const ok = (x, max) => typeof x === 'number' && isFinite(x) && Math.abs(x) <= max;
+    return v && ok(v.lat, 90) && ok(v.lng, 180) ? { lat: v.lat, lng: v.lng } : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Call with the script lock held: deletes the points of sessions that can't take check-ins any more. */
+function pruneSites_(sessions, nowMs) {
+  const keep = {};
+  sessions.forEach((s) => { if (s.closesAt.getTime() > nowMs) keep[SITE_PROP_PREFIX_ + s.id] = true; });
+  const props = PropertiesService.getScriptProperties();
+  props.getKeys().forEach((k) => {
+    if (k.indexOf(SITE_PROP_PREFIX_) === 0 && !keep[k]) props.deleteProperty(k);
+  });
 }
 
 /**
@@ -192,8 +233,6 @@ function readSessions_() {
     if (!isDate_(opensAt) || !isDate_(closesAt) || isNaN(opensAt.getTime()) || isNaN(closesAt.getTime())) {
       throw new SetupError_('Sessions row ' + (i + 1) + ': opens_at and closes_at must be date-times.');
     }
-    const lat = num(r[SESSION_COL_.SITE_LAT - 1]);
-    const lng = num(r[SESSION_COL_.SITE_LNG - 1]);
     sessions.push({
       row: i + 1,
       id: id,
@@ -203,8 +242,6 @@ function readSessions_() {
       closesAt: closesAt,
       status: String(r[SESSION_COL_.STATUS - 1]).trim(),
       count: Number(r[SESSION_COL_.COUNT - 1]) || 0,
-      // Sessions from before check-in points existed have none; they can't take check-ins.
-      site: lat !== null && lng !== null && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat: lat, lng: lng } : null,
     });
   }
   return sessions;

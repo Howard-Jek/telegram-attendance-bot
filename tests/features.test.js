@@ -393,9 +393,9 @@ test('location: check-ins are measured from wherever that session was started', 
   env.setNow(T0 + 61 * MIN);
   env.start(ADMIN2, SITE_FIX);
   assert.equal(env.checkin(MEMBER, ONSITE).code, 'CHECKED_IN');
-  const log = env.rows('Log');
-  assert.ok(log[0][9] < 1, 'distance from the first session\'s point');
-  assert.ok(log[1][9] > 50 && log[1][9] < 60, 'distance from the second session\'s point');
+  const log = env.records('Log');
+  assert.ok(log[0].distance_m < 1, 'distance from the first session\'s point');
+  assert.ok(log[1].distance_m > 50 && log[1].distance_m < 60, 'distance from the second session\'s point');
 });
 
 test('location: the admin who started it can move the check-in point to where they stand', () => {
@@ -410,7 +410,8 @@ test('location: the admin who started it can move the check-in point to where th
   const moved = env.req('moveSite', ADMIN, { location: SITE_FIX });
   assert.equal(moved.code, 'SITE_MOVED');
   assert.equal(moved.data.closesAtText, '11:30');
-  assert.deepEqual(env.rows('Sessions')[0].slice(8, 11), [SITE_FIX.lat, SITE_FIX.lng, SITE_FIX.accuracy]);
+  assert.equal(env.records('Sessions')[0].site_accuracy_m, SITE_FIX.accuracy);
+  assert.deepEqual(env.siteOf(moved.data.sessionId), { lat: SITE_FIX.lat, lng: SITE_FIX.lng });
   assert.equal(env.checkin(MEMBER, ONSITE).code, 'CHECKED_IN');
 });
 
@@ -448,7 +449,7 @@ test('distance: members get a rounded distance, or none beyond 1 km; admins get 
   assert.doesNotMatch(JSON.stringify(res), /111\d/);
   const admin = env.checkin(ADMIN2, OFFSITE);
   assert.ok(admin.data.distanceM > 1100 && admin.data.distanceM < 1120, 'admins may need it to move the point');
-  assert.ok(env.rows('Rejected').every((r) => typeof r[9] === 'number'), 'the Sheet keeps exact distances');
+  assert.ok(env.records('Rejected').every((r) => typeof r.distance_m === 'number'), 'the Sheet keeps exact distances');
 });
 
 test('distance: after 10 out-of-range answers in a session, a member only hears in or out', () => {
@@ -639,7 +640,7 @@ test('profile: first check-in -> no profile yet; saving one fills the Members ta
   const [m] = env.rows('Members');
   assert.deepEqual(m.slice(0, 5), [String(MEMBER.id), 'Cy Tan', 'Bravo', 'Cy Member', 'cy']);
   assert.equal(m[5].getTime(), T0);
-  assert.deepEqual(env.rows('Log')[0].slice(11, 13), ['Cy Tan', 'Bravo']);
+  assert.deepEqual([env.records('Log')[0].full_name, env.records('Log')[0].group], ['Cy Tan', 'Bravo']);
 });
 
 test('profile: remembered, so the next check-in is filed straight away', () => {
@@ -648,12 +649,12 @@ test('profile: remembered, so the next check-in is filed straight away', () => {
   env.start(ADMIN);
   const res = env.checkin(MEMBER);
   assert.deepEqual(res.data.profile, { fullName: 'Cy Tan', group: 'Alpha' });
-  assert.deepEqual(env.rows('Log')[0].slice(11, 13), ['Cy Tan', 'Alpha']);
+  assert.deepEqual([env.records('Log')[0].full_name, env.records('Log')[0].group], ['Cy Tan', 'Alpha']);
   assert.deepEqual(env.checkin(MEMBER).data.profile, { fullName: 'Cy Tan', group: 'Alpha' }, 'also on ALREADY_CHECKED_IN');
   // Changing it later updates the Members row, not a second one.
   env.saveProfile(MEMBER, 'Cy Tan', 'Bravo');
   assert.equal(env.rows('Members').length, 1);
-  assert.deepEqual(env.rows('Log')[0].slice(11, 13), ['Cy Tan', 'Bravo']);
+  assert.deepEqual([env.records('Log')[0].full_name, env.records('Log')[0].group], ['Cy Tan', 'Bravo']);
 });
 
 test('profile: status shows it to someone already checked in, and only then', () => {
@@ -679,7 +680,7 @@ test('profile: the group must be on the Groups tab; a removed group is asked for
   env.setNow(T0 + 61 * 1000); // the Groups copy lasts a minute
   env.start(ADMIN);
   assert.deepEqual(env.checkin(MEMBER).data.profile, { fullName: 'Cy Tan', group: '' });
-  assert.equal(env.rows('Log')[0][12], '');
+  assert.equal(env.records('Log')[0].group, '');
 });
 
 test('profile: names must be real text of sensible length; odd characters are cleaned', () => {
@@ -701,7 +702,7 @@ test('profile: names and groups are stored as text (no formulas), and odd group 
   env.saveProfile(MEMBER, '=HYPERLINK("http://evil.example","x")', '-A team');
   env.saveProfile(MEMBER2, 'Di', '1');
   assert.deepEqual(env.formulaWrites, []);
-  assert.deepEqual(env.rows('Log')[0].slice(11, 13), ["'=HYPERLINK(\"http://evil.example\",\"x\")", '-A team']);
+  assert.deepEqual([env.records('Log')[0].full_name, env.records('Log')[0].group], ["'=HYPERLINK(\"http://evil.example\",\"x\")", '-A team']);
   env.setNow(T0 + 61 * MIN);
   env.start(ADMIN);
   assert.equal(env.checkin(MEMBER).data.profile.group, '-A team', 'still matches the Groups tab');
@@ -786,7 +787,7 @@ test('setup(): a rejected BOT_TOKEN or webhook fails loudly', () => {
   assert.throws(() => env.call('setup'), /refused the webhook/);
 });
 
-test('setupSheets(): an existing Sheet from the first version gains the new columns and tabs, data untouched', () => {
+test('setupSheets(): an existing Sheet from the first version gains the new columns and tabs, and loses its coordinates', () => {
   const env = createEnv({ props: { BOT_TOKEN: TOKEN } });
   const ss = env.ss;
   const old = {
@@ -805,12 +806,15 @@ test('setupSheets(): an existing Sheet from the first version gains the new colu
   env.props.SPREADSHEET_ID = ss.getId();
   env.setNow(T0);
   assert.throws(() => env.eval('readSessions_()'), /run setup\(\) once/);
+  assert.throws(() => env.eval('findCheckin_("x")'), /run setup\(\) once/);
 
   env.call('setupSheets');
-  assert.deepEqual(env.sheet('Sessions').getRange(1, 1, 1, 11).getValues()[0].slice(8), ['site_lat', 'site_lng', 'site_accuracy_m']);
-  assert.deepEqual(env.sheet('Log').getRange(1, 1, 1, 13).getValues()[0].slice(11), ['full_name', 'group']);
+  assert.deepEqual(env.sheet('Sessions').getRange(1, 1, 1, 9).getValues()[0].slice(8), ['site_accuracy_m']);
+  assert.deepEqual(env.sheet('Log').getRange(1, 1, 1, 11).getValues()[0],
+    ['timestamp', 'session_id', 'user_id', 'first_name', 'last_name', 'username', 'accuracy_m', 'distance_m', 'dedupe_key', 'full_name', 'group']);
   assert.deepEqual(env.sheet('Sessions').rows()[0].slice(0, 8), old.Sessions[1]);
-  assert.deepEqual(env.sheet('Log').rows()[0].slice(0, 11), old.Log[1]);
+  assert.deepEqual(env.sheet('Log').rows()[0].slice(0, 9),
+    [new Date(T0), 'S-20260921-2205', 159911700, 'Howard', '', 'Howiiee', 11.1, 32.6, 'S-20260921-2205:159911700']);
   assert.ok(env.sheet('Groups') && env.sheet('Members'));
   const cfg = env.sheet('Config').rows();
   assert.equal(cfg.find((r) => r[0] === 'GROUP_CHAT_ID')[1], BASIC_GROUP);
@@ -876,7 +880,7 @@ test('cache: an error after the row is written can\'t lead to a second row on re
 test('cache: a check-in row added by hand stops the app adding another', () => {
   const env = setup();
   env.start(ADMIN);
-  env.sheet('Log').appendRow([new Date(T0), 'S-20260921-1030', MEMBER.id, 'Cy', 'Member', 'cy', '', '', '', '', `S-20260921-1030:${MEMBER.id}`, '', '']);
+  env.sheet('Log').appendRow([new Date(T0), 'S-20260921-1030', MEMBER.id, 'Cy', 'Member', 'cy', '', '', `S-20260921-1030:${MEMBER.id}`, '', '']);
   assert.equal(env.checkin(MEMBER).code, 'ALREADY_CHECKED_IN');
   assert.equal(env.rows('Log').length, 1);
 });
@@ -926,12 +930,14 @@ test('cache: only the lock holder writes the sessions copy (a slow reader can\'t
   assert.equal(env.req('status', MEMBER2).data.activeSession.closesAtText, '11:30', 'a new session shows at once');
 });
 
-test('cache: moving the point updates the copy status reads', () => {
+test('cache: moving the point replaces the one check-ins use; no copy of Sheet data holds coordinates', () => {
   const env = setup();
   env.start(ADMIN, { lat: SITE.lat + 0.02, lng: SITE.lng, accuracy: 10 });
   env.req('moveSite', ADMIN, { location: SITE_FIX });
+  assert.deepEqual(env.siteOf('S-20260921-1030'), { lat: SITE_FIX.lat, lng: SITE_FIX.lng });
   const copy = JSON.parse(env.cache.get('sessions:current').value);
-  assert.deepEqual(copy[0].site, { lat: SITE_FIX.lat, lng: SITE_FIX.lng });
+  assert.equal('site' in copy[0], false);
+  assert.equal(env.checkin(MEMBER, ONSITE).code, 'CHECKED_IN');
 });
 
 test('cache: Config edits take effect within a minute', () => {
@@ -1062,7 +1068,7 @@ test('burst: saving a name and group never queues behind check-ins', () => {
   assert.equal(saved.code, 'PROFILE_SAVED');
   assert.equal(env.events.filter((e) => e.type === 'tryLock').length, 0, 'not the check-in lock');
   assert.equal(env.events.filter((e) => e.type === 'tryUserLock').length, 1);
-  assert.deepEqual(env.rows('Log')[0].slice(11, 13), ['Cy Tan', 'Bravo'], 'today\'s row still gets the details');
+  assert.deepEqual([env.records('Log')[0].full_name, env.records('Log')[0].group], ['Cy Tan', 'Bravo'], 'today\'s row still gets the details');
   env.userLockHeldElsewhere = true;
   assert.equal(env.saveProfile(MEMBER, 'Cy Tan', 'Alpha').code, 'BUSY', 'saves still take turns among themselves');
 });
@@ -1250,7 +1256,7 @@ test('starter: only the admin who started it can move the check-in point', () =>
     assert.equal(r.code, 'NOT_STARTER');
     assert.match(r.message, /Ada Admin started this check-in/);
   }
-  assert.deepEqual(env.rows('Sessions')[0].slice(8, 10), [SITE_FIX.lat, SITE_FIX.lng]);
+  assert.deepEqual(env.siteOf(env.records('Sessions')[0].session_id), { lat: SITE_FIX.lat, lng: SITE_FIX.lng });
 });
 
 test('starter: status tells each admin whether they started the open check-in (members aren\'t told)', () => {

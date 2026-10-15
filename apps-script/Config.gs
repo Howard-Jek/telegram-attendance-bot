@@ -19,22 +19,33 @@ const SHEETS_ = {
   MEMBERS: 'Members',
 };
 
+// No tab holds a latitude or longitude: a check-in keeps only its distance from the check-in
+// point and the GPS accuracy, and the point itself lives in Script Properties (Sessions.gs).
 const HEADERS_ = {
   Config: ['key', 'value'],
   Sessions: ['session_id', 'started_by_id', 'started_by_name', 'opens_at', 'closes_at',
-    'announcement_message_id', 'status', 'checkin_count', 'site_lat', 'site_lng', 'site_accuracy_m'],
+    'announcement_message_id', 'status', 'checkin_count', 'site_accuracy_m'],
   Log: ['timestamp', 'session_id', 'user_id', 'first_name', 'last_name', 'username',
-    'latitude', 'longitude', 'accuracy_m', 'distance_m', 'dedupe_key', 'full_name', 'group'],
+    'accuracy_m', 'distance_m', 'dedupe_key', 'full_name', 'group'],
   Rejected: ['timestamp', 'session_id', 'user_id', 'name', 'username', 'reason',
-    'latitude', 'longitude', 'accuracy_m', 'distance_m'],
+    'accuracy_m', 'distance_m'],
   Groups: ['group'],
   Members: ['user_id', 'full_name', 'group', 'telegram_name', 'username', 'updated_at'],
 };
 
 // 1-based column numbers.
 const SESSION_COL_ = { ID: 1, STARTED_BY_ID: 2, STARTED_BY_NAME: 3, OPENS_AT: 4, CLOSES_AT: 5,
-  MESSAGE_ID: 6, STATUS: 7, COUNT: 8, SITE_LAT: 9, SITE_LNG: 10, SITE_ACCURACY: 11 };
-const LOG_COL_ = { TIMESTAMP: 1, SESSION_ID: 2, DEDUPE_KEY: 11, FULL_NAME: 12, GROUP: 13 };
+  MESSAGE_ID: 6, STATUS: 7, COUNT: 8, SITE_ACCURACY: 9 };
+const LOG_COL_ = { TIMESTAMP: 1, SESSION_ID: 2, USER_ID: 3, FIRST_NAME: 4, LAST_NAME: 5, USERNAME: 6,
+  ACCURACY: 7, DISTANCE: 8, DEDUPE_KEY: 9, FULL_NAME: 10, GROUP: 11 };
+
+// Tabs as versions before October 2026 laid them out, with coordinate columns. setup() removes
+// them (removeStoredLocations_ in Setup.gs); until then requests ask for setup() to be run.
+const LEGACY_LOCATION_COLUMNS_ = {
+  Sessions: { col: 9, headers: ['site_lat', 'site_lng'] },
+  Log: { col: 7, headers: ['latitude', 'longitude'] },
+  Rejected: { col: 7, headers: ['latitude', 'longitude'] },
+};
 const MEMBER_COL_ = { USER_ID: 1, FULL_NAME: 2, GROUP: 3, TELEGRAM_NAME: 4, USERNAME: 5, UPDATED_AT: 6 };
 
 // Blank means "not set". GROUP_CHAT_ID is filled in by the bot when it is added to a group.
@@ -158,6 +169,10 @@ function spreadsheet_() {
 function assertHeaders_(name, headerRow) {
   const expected = HEADERS_[name];
   if (expected.every((h, i) => String(headerRow[i]).trim() === h)) return;
+  const legacy = LEGACY_LOCATION_COLUMNS_[name];
+  if (legacy && String(headerRow[legacy.col - 1]).trim() === legacy.headers[0]) {
+    throw new SetupError_('The bot was updated. The owner needs to run setup() once in the Apps Script editor.');
+  }
   // Columns added by an update are appended by setup(); until it runs, say that instead.
   const filled = expected.filter((h, i) => String(headerRow[i]).trim() !== '').length;
   if (filled > 0 && expected.slice(0, filled).every((h, i) => String(headerRow[i]).trim() === h)) {

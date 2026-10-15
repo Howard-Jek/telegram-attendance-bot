@@ -85,7 +85,7 @@ test('AT1: admin starts a session -> one Sessions row with server-time window', 
   assert.equal(res.data.closesAtText, '11:30');
   const rows = env.rows('Sessions');
   assert.equal(rows.length, 1);
-  const [id, byId, byName, opens, closes, msgId, status, count, lat, lng, acc] = rows[0];
+  const [id, byId, byName, opens, closes, msgId, status, count, acc] = rows[0];
   assert.equal(id, 'S-20260921-1030');
   assert.equal(byId, ADMIN.id);
   assert.equal(byName, 'Ada Admin');
@@ -93,7 +93,9 @@ test('AT1: admin starts a session -> one Sessions row with server-time window', 
   assert.equal(opens.getTime(), T0);
   assert.equal(closes.getTime() - opens.getTime(), 60 * MIN);
   assert.deepEqual([status, count], ['open', 0]);
-  assert.deepEqual([lat, lng, acc], [SITE_FIX.lat, SITE_FIX.lng, SITE_FIX.accuracy], 'centred on the admin');
+  assert.equal(acc, SITE_FIX.accuracy);
+  assert.equal(rows[0].length, 9, 'no coordinates in the Sheet');
+  assert.deepEqual(env.siteOf(id), { lat: SITE_FIX.lat, lng: SITE_FIX.lng }, 'centred on the admin, kept out of the Sheet');
   assert.equal(msgId, env.visible()[0].messageId, 'the group announcement is recorded');
   assert.equal(env.rows('Log').length, 0, 'admins are not auto-checked in');
 });
@@ -192,12 +194,13 @@ test('AT3: on-site member -> exactly one Log row, SGT server timestamp, all fiel
   assert.equal(res.data.atText, '10:35');
   const rows = env.rows('Log');
   assert.equal(rows.length, 1);
-  const [ts, sid, uid, first, last, username, lat, lng, acc, dist, key] = rows[0];
+  const [ts, sid, uid, first, last, username, acc, dist, key] = rows[0];
   assert.ok(isDate(ts));
   assert.equal(ts.getTime(), T0 + 5 * MIN);
   assert.equal(formatDate(ts, 'Asia/Singapore', 'yyyy-MM-dd HH:mm:ss'), '2026-09-21 10:35:15');
   assert.deepEqual([sid, uid, first, last, username], ['S-20260921-1030', MEMBER.id, 'Cy', 'Member', 'cy']);
-  assert.deepEqual([lat, lng, acc], [ONSITE.lat, ONSITE.lng, 20]);
+  assert.equal(acc, 20);
+  assert.deepEqual(env.sheet('Log').getRange(1, 1, 1, 11).getValues()[0].slice(6, 9), ['accuracy_m', 'distance_m', 'dedupe_key'], 'no latitude/longitude columns');
   assert.ok(dist > 50 && dist < 60, `distance ${dist}`);
   assert.equal(key, `S-20260921-1030:${MEMBER.id}`);
   env.call('closeExpiredSessions'); // the close job keeps checkin_count up to date
@@ -249,9 +252,11 @@ test('AT6: poor accuracy / off-site -> rejected + Rejected row, retry allowed', 
   const rej = env.rows('Rejected');
   assert.deepEqual(rej.map((r) => r[5]), ['LOW_ACCURACY', 'OUT_OF_RANGE', 'LOW_ACCURACY']);
   assert.deepEqual(rej[0].slice(1, 5), ['S-20260921-1030', MEMBER.id, 'Cy Member', 'cy']);
-  assert.equal(rej[0][8], 250);
-  assert.equal(rej[0][9], '', 'no distance computed for LOW_ACCURACY');
-  assert.ok(rej[1][9] > 1000);
+  const recs = env.records('Rejected');
+  assert.equal(recs[0].accuracy_m, 250);
+  assert.equal(recs[0].distance_m, '', 'no distance computed for LOW_ACCURACY');
+  assert.ok(recs[1].distance_m > 1000);
+  assert.ok(recs.every((r) => !('latitude' in r) && !('longitude' in r)));
   assert.equal(env.rows('Log').length, 0);
 
   assert.equal(env.checkin(MEMBER, ONSITE).code, 'CHECKED_IN');
@@ -381,7 +386,7 @@ test('a new session gives everyone a fresh check-in', () => {
   env.setNow(T0 + 61 * MIN);
   env.start(ADMIN2);
   assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN');
-  const keys = env.rows('Log').map((r) => r[10]);
+  const keys = env.records('Log').map((r) => r.dedupe_key);
   assert.deepEqual(keys, [`S-20260921-1030:${MEMBER.id}`, `S-20260921-1131:${MEMBER.id}`]);
   env.call('closeExpiredSessions');
   assert.deepEqual(env.rows('Sessions').map((r) => r[7]), [1, 1]);
@@ -518,7 +523,7 @@ test('geofence boundary: ~140 m accepted, ~160 m rejected (RADIUS_M 150)', () =>
   assert.equal(inside.code, 'CHECKED_IN');
   const outside = env.checkin(MEMBER2, { lat: SITE.lat + 0.001439, lng: SITE.lng, accuracy: 20 });
   assert.equal(outside.code, 'OUT_OF_RANGE');
-  assert.equal(env.rows('Rejected')[0][9], 160, 'the exact distance is kept in the Sheet');
+  assert.equal(env.records('Rejected')[0].distance_m, 160, 'the exact distance is kept in the Sheet');
 });
 
 test('checkin_count counts every accepted check-in', () => {
@@ -530,7 +535,7 @@ test('checkin_count counts every accepted check-in', () => {
   assert.equal(env.rows('Sessions')[0][7], 3);
 });
 
-test('Rejected rows carry a Date timestamp, the submitted coordinates and the session id', () => {
+test('Rejected rows carry a Date timestamp, the distance and accuracy (never coordinates) and the session id', () => {
   const env = setup({ statuses: { [OUTSIDER.id]: 'left' } });
   env.start(ADMIN);
   env.setNow(T0 + 3 * MIN);
@@ -539,9 +544,11 @@ test('Rejected rows carry a Date timestamp, the submitted coordinates and the se
   const [off, notMember] = env.rows('Rejected');
   assert.ok(isDate(off[0]));
   assert.equal(off[0].getTime(), T0 + 3 * MIN);
-  assert.deepEqual([off[6], off[7]], [OFFSITE.lat, OFFSITE.lng]);
+  assert.equal(off.length, 8, 'timestamp … reason, accuracy_m, distance_m');
+  assert.equal(off[6], OFFSITE.accuracy);
+  assert.ok(off[7] > 1000);
   assert.deepEqual([notMember[1], notMember[2], notMember[5]], ['S-20260921-1030', OUTSIDER.id, 'NOT_MEMBER']);
-  assert.deepEqual(notMember.slice(6, 10), ['', '', '', ''], 'no location is kept for people outside the group');
+  assert.deepEqual(notMember.slice(6, 8), ['', ''], 'nothing about the location of people outside the group');
 });
 
 test('check order: accuracy before distance; platform before membership (no Bot API call)', () => {
@@ -643,7 +650,8 @@ test('setupSheets copes with pre-existing tabs that have a single row or few col
   log.maxCols = 3;
   env.call('setupSheets');
   assert.ok(log.getMaxRows() >= 2 && log.getMaxColumns() >= 11);
-  assert.equal(env.sheet('Log').getRange(1, 11).getValue(), 'dedupe_key');
+  assert.equal(env.sheet('Log').getRange(1, 9).getValue(), 'dedupe_key');
+  assert.equal(env.sheet('Log').getRange(1, 11).getValue(), 'group');
 });
 
 test('doPost always answers JSON, even when Script Properties are unavailable', () => {

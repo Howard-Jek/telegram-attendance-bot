@@ -1,9 +1,9 @@
 /**
  * One-off helpers the owner runs from the Apps Script editor (pick the function, press Run).
  *
- *   setup()     after installing or updating: prepares the Sheet, connects the bot's webhook,
- *               adds /checkin to the bot's command menu and installs the 5-minute close job.
- *               Safe to run again at any time.
+ *   setup()     after installing or updating: prepares the Sheet (removing the coordinate columns
+ *               versions before October 2026 kept), connects the bot's webhook, adds /checkin to
+ *               the bot's command menu and installs the 5-minute close job. Safe to run again.
  *   selfTest()  offline checks of initData verification and distance maths.
  */
 
@@ -23,14 +23,16 @@ function setup() {
 }
 
 /**
- * Creates any missing tabs and header cells (an update's new columns are appended; data is never
- * moved), seeds Config keys, and records this Sheet's id so the web app can open it.
+ * Creates any missing tabs and header cells (an update's new columns are appended), removes the
+ * coordinate columns of earlier versions, seeds Config keys, and records this Sheet's id so the
+ * web app can open it.
  */
 function setupSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet(); // works here (editor), but not inside the web app
   PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
   openedSpreadsheet_ = ss;
   ss.setSpreadsheetTimeZone(TZ_); // Sheets shows Date cells in the spreadsheet's zone, not the script's
+  removeStoredLocations_(ss);
 
   Object.keys(HEADERS_).forEach((name) => {
     const sheet = ss.getSheetByName(name) || ss.insertSheet(name);
@@ -94,6 +96,57 @@ function connectWebhook_(token) {
 function ensureConnectCode_() {
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('CONNECT_CODE')) props.setProperty('CONNECT_CODE', Utilities.getUuid().replace(/-/g, ''));
+}
+
+/**
+ * Versions before October 2026 kept each check-in's latitude and longitude (Log, Rejected) and the
+ * check-in point (Sessions). This deletes those columns; an open session's point moves to Script
+ * Properties first, so it carries on. Under the script lock, so no check-in writes mid-way.
+ * Run again, it finds nothing to do.
+ */
+function removeStoredLocations_(ss) {
+  const legacy = (name) => {
+    const sheet = ss.getSheetByName(name);
+    const spec = LEGACY_LOCATION_COLUMNS_[name];
+    if (!sheet || sheet.getMaxColumns() < spec.col + 1) return null;
+    const found = sheet.getRange(1, spec.col, 1, 2).getValues()[0].map((v) => String(v).trim());
+    return found[0] === spec.headers[0] && found[1] === spec.headers[1] ? sheet : null;
+  };
+  const names = Object.keys(LEGACY_LOCATION_COLUMNS_);
+  if (!names.some(legacy)) return;
+  const done = withScriptLock_(() => {
+    names.forEach((name) => {
+      const sheet = legacy(name);
+      if (!sheet) return;
+      const col = LEGACY_LOCATION_COLUMNS_[name].col;
+      if (name === SHEETS_.SESSIONS) keepOpenSites_(sheet, col);
+      const rows = Math.max(0, sheet.getLastRow() - 1);
+      sheet.deleteColumns(col, 2);
+      Logger.log('Removed the ' + LEGACY_LOCATION_COLUMNS_[name].headers.join(' and ') + ' columns from ' + name +
+        ' (' + rows + ' rows).');
+    });
+    cacheRemove_(SESSIONS_CACHE_KEY_);
+    return true;
+  });
+  if (!done) throw new Error('Someone is checking in right now (the check-in lock is busy). Run setup() again in a minute.');
+  Logger.log('Exact locations are no longer kept in the Sheet. Earlier copies remain in File > Version history, ' +
+    'which only editors of the Sheet can open.');
+}
+
+/** Copies the check-in point of each session that can still take check-ins into Script Properties. */
+function keepOpenSites_(sheet, latCol) {
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const nowMs = now_().getTime();
+  sheet.getRange(2, 1, last - 1, latCol + 1).getValues().forEach((r) => {
+    const id = String(r[SESSION_COL_.ID - 1]).trim();
+    const closesAt = r[SESSION_COL_.CLOSES_AT - 1];
+    const lat = r[latCol - 1];
+    const lng = r[latCol];
+    if (!id || !isDate_(closesAt) || closesAt.getTime() <= nowMs) return;
+    if (typeof lat !== 'number' || typeof lng !== 'number' || readSite_(id)) return;
+    saveSite_(id, { lat: lat, lng: lng });
+  });
 }
 
 function setBotCommands_(token) {

@@ -62,8 +62,9 @@ function describeSendError_(res) {
 }
 
 /**
- * Time-driven trigger (every 5 minutes, installed by setup()). Keeps checkin_count current for
- * open sessions (check-ins don't write it), marks ended sessions closed with the final count,
+ * Time-driven trigger (every 5 minutes, installed by setup()). Keeps checkin_count and each open
+ * session's tab current (check-ins write neither), marks ended sessions closed with the final
+ * count and list, deletes the check-in points of sessions that can't take check-ins any more,
  * and turns the live message into the result, broken down by group.
  */
 function closeExpiredSessions() {
@@ -81,10 +82,21 @@ function closeExpiredSessions_() {
   const done = withScriptLock_(() => {
     const sessions = readSessions_();
     cacheSessions_(sessions, now.getTime()); // every run refreshes the copy, picking up hand edits
+    pruneSites_(sessions, now.getTime());
     const open = sessions.filter((s) => s.status === 'open');
-    if (!open.length) return { closed: [] };
+    if (!open.length) return { closed: [], tabs: [] };
     const tally = tallyLog_(open.map((s) => s.id));
     const due = open.filter((s) => s.closesAt.getTime() <= now.getTime());
+    // Each open session's tab, made here if it's missing (under the lock, so only once); filled in
+    // below, after the lock is released, so check-ins don't wait on it.
+    const tabs = [];
+    open.forEach((s) => {
+      try {
+        tabs.push({ session: s, sheet: ensureSessionTab_(s), final: due.indexOf(s) !== -1 });
+      } catch (err) {
+        console.warn('Could not find or make the session tab for ' + s.id + ': ' + redactSecrets_(String(err && err.message)));
+      }
+    });
     const sheet = sheet_(SHEETS_.SESSIONS);
     open.forEach((s) => {
       s.tally = tally[s.id];
@@ -94,12 +106,22 @@ function closeExpiredSessions_() {
         sheet.getRange(s.row, SESSION_COL_.COUNT).setValue(s.tally.count);
       }
     });
-    if (!due.length) return { closed: [] };
+    if (!due.length) return { closed: [], tabs: tabs };
     // Only a session that just ended is announced; a backlog (e.g. the job was off) closes quietly.
     const recent = latest_(due.filter((s) => now.getTime() - s.closesAt.getTime() < ANNOUNCE_WINDOW_MS_));
-    return { closed: due, recent: recent, live: recent ? takeLiveMessage_(recent.id) : null };
+    return { closed: due, recent: recent, live: recent ? takeLiveMessage_(recent.id) : null, tabs: tabs };
   });
   if (!done) return; // lock busy: the next run picks it up
+  if (done.tabs.length) {
+    const groupOrder = readGroups_();
+    done.tabs.forEach((t) => {
+      try {
+        writeSessionTab_(t.sheet, t.session, t.session.tally.people, groupOrder, t.final);
+      } catch (err) {
+        console.warn('Could not update the session tab for ' + t.session.id + ': ' + redactSecrets_(String(err && err.message)));
+      }
+    });
+  }
   if (!done.recent || !CONFIG_CHECKS_.GROUP_CHAT_ID(cfg)) return;
 
   const token = botToken_();
@@ -113,10 +135,13 @@ function closeExpiredSessions_() {
   if (!sent.ok) console.warn('Could not post the check-in result: ' + sent.error_code + ' ' + sent.description);
 }
 
-/** {sessionId: {count, groups: {name: n}}} for the given sessions, counted from the Log. */
+/**
+ * {sessionId: {count, groups: {name: n}, people: [...]}} for the given sessions, from the Log.
+ * people are the Log rows, for the session's tab.
+ */
 function tallyLog_(sessionIds) {
   const tally = {};
-  sessionIds.forEach((id) => { tally[id] = { count: 0, groups: {} }; });
+  sessionIds.forEach((id) => { tally[id] = { count: 0, groups: {}, people: [] }; });
   const sheet = sheet_(SHEETS_.LOG);
   const last = sheet.getLastRow();
   if (last < 1) return tally;
@@ -125,9 +150,19 @@ function tallyLog_(sessionIds) {
   for (let i = 1; i < values.length; i++) {
     const t = tally[String(values[i][LOG_COL_.SESSION_ID - 1]).trim()];
     if (!t) continue;
-    const group = String(values[i][LOG_COL_.GROUP - 1]).trim();
+    const r = values[i];
+    const group = String(r[LOG_COL_.GROUP - 1]).trim();
     t.count++;
     t.groups[group] = (t.groups[group] || 0) + 1;
+    t.people.push({
+      at: toDate_(r[LOG_COL_.TIMESTAMP - 1]),
+      userId: String(r[LOG_COL_.USER_ID - 1]).trim(),
+      fullName: String(r[LOG_COL_.FULL_NAME - 1]).trim(),
+      group: group,
+      firstName: String(r[LOG_COL_.FIRST_NAME - 1]).trim(),
+      lastName: String(r[LOG_COL_.LAST_NAME - 1]).trim(),
+      username: String(r[LOG_COL_.USERNAME - 1]).trim(),
+    });
   }
   return tally;
 }
@@ -137,11 +172,21 @@ function closedText_(session, groupOrder) {
   const t = session.tally;
   const head = 'Check-in closed at ' + hhmm_(session.closesAt) + ' · ' +
     (t.count ? t.count + ' checked in' : 'nobody checked in');
-  const names = Object.keys(t.groups);
-  if (!t.count || (names.length === 1 && names[0] === '')) return head;
-  const order = groupOrder.filter((g) => t.groups[g])
-    .concat(names.filter((g) => g && groupOrder.indexOf(g) === -1).sort());
-  const parts = order.map((g) => g + ' ' + t.groups[g]);
-  if (t.groups['']) parts.push('No group ' + t.groups['']);
-  return head + '\n' + parts.join(' · ');
+  const parts = groupBreakdown_(t.groups, groupOrder);
+  return parts.length ? head + '\n' + parts.join(' · ') : head;
+}
+
+/** The groups present in counts: the Groups tab's order first, then any others A–Z ('' not included). */
+function groupBreakdownOrder_(counts, groupOrder) {
+  const names = Object.keys(counts);
+  return groupOrder.filter((g) => counts[g]).concat(names.filter((g) => g && groupOrder.indexOf(g) === -1).sort());
+}
+
+/** ["Alpha 10", "Bravo 8", "No group 5"], or [] when nobody has a group (a breakdown would say nothing). */
+function groupBreakdown_(counts, groupOrder) {
+  const names = Object.keys(counts).filter((g) => counts[g]);
+  if (!names.length || (names.length === 1 && names[0] === '')) return [];
+  const parts = groupBreakdownOrder_(counts, groupOrder).map((g) => g + ' ' + counts[g]);
+  if (counts['']) parts.push('No group ' + counts['']);
+  return parts;
 }

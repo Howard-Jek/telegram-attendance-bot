@@ -100,6 +100,14 @@ function setup({ statuses = {}, config = {}, telegram = {}, groups = [], props =
   env.checkin = (user, location = ONSITE, extra = {}) => env.req('checkin', user, { location, ...extra });
   env.saveProfile = (user, fullName, group) => env.req('saveProfile', user, { fullName, group });
   env.rows = (name) => env.sheet(name).rows();
+  /** Data rows as objects keyed by the tab's header row, so tests don't depend on column positions. */
+  env.records = (name) => {
+    const sheet = env.sheet(name);
+    const header = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0].map(String);
+    return sheet.rows().map((r) => Object.fromEntries(header.map((h, i) => [h, r[i] === undefined ? '' : r[i]])));
+  };
+  /** A session's check-in point, kept in Script Properties (never in the Sheet). */
+  env.siteOf = (sessionId) => (env.props['SITE:' + sessionId] ? JSON.parse(env.props['SITE:' + sessionId]) : null);
   env.config = (key) => {
     const row = env.rows('Config').find((r) => r[0] === key);
     return row ? row[1] : undefined;

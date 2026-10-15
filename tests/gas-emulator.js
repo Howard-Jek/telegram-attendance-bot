@@ -94,12 +94,59 @@ class MockSheet {
     this.frozenRows = 0;
     this.maxRows = 1000;
     this.maxCols = 26;
+    this.metadata = [];
+    this.id = ss.nextSheetId++;
   }
   getName() { return this.name; }
+  setName(name) {
+    if (this.ss.getSheetByName(name) && this.ss.getSheetByName(name) !== this) throw new Error(`A sheet with the name "${name}" already exists.`);
+    this.name = name;
+    return this;
+  }
+  getIndex() { return this.ss.list.indexOf(this) + 1; } // 1-based, like Apps Script
+  getSheetId() { return this.id; }
   getMaxRows() { return this.maxRows; }
   getMaxColumns() { return this.maxCols; }
   insertRowsAfter(after, n) { this.maxRows += n; return this; }
   insertColumnsAfter(after, n) { this.maxCols += n; return this; }
+  // Shift the cells (and formats) after the deleted block back over it.
+  _shift(axis, start, n) {
+    for (const map of [this.cells, this.formats]) {
+      const moved = new Map();
+      for (const [k, v] of map) {
+        let [r, c] = k.split(':').map(Number);
+        const pos = axis === 'row' ? r : c;
+        if (pos >= start && pos < start + n) continue;
+        if (pos >= start + n) { if (axis === 'row') r -= n; else c -= n; }
+        moved.set(`${r}:${c}`, v);
+      }
+      map.clear();
+      for (const [k, v] of moved) map.set(k, v);
+    }
+  }
+  deleteColumns(start, n = 1) {
+    this.ss.env.events.push({ type: 'deleteColumns', sheet: this.name, start, n });
+    if (start < 1 || start + n - 1 > this.maxCols) throw new Error('Those columns are out of bounds.');
+    if (n >= this.maxCols) throw new Error('Sorry, it is not possible to delete all non-frozen columns.');
+    this._shift('col', start, n);
+    this.maxCols -= n;
+    return this;
+  }
+  deleteRows(start, n = 1) {
+    if (start < 1 || start + n - 1 > this.maxRows) throw new Error('Those rows are out of bounds.');
+    if (this.maxRows - n <= this.frozenRows) throw new Error('Sorry, it is not possible to delete all non-frozen rows.');
+    this._shift('row', start, n);
+    this.maxRows -= n;
+    return this;
+  }
+  clearContents() { this.cells.clear(); return this; }
+  setColumnWidth() { return this; }
+  setColumnWidths() { return this; }
+  getFrozenRows() { return this.frozenRows; }
+  addDeveloperMetadata(key, value, visibility) {
+    this.metadata.push({ key, value: String(value), visibility: visibility || 'DOCUMENT' });
+    return this;
+  }
   getLastRow() {
     let last = 0;
     for (const [k, v] of this.cells) if (v !== '') last = Math.max(last, Number(k.split(':')[0]));
@@ -172,19 +219,43 @@ class MockSheet {
 class MockSpreadsheet {
   constructor(env) {
     this.env = env;
-    this.sheets = new Map();
+    this.list = []; // in tab order
+    this.nextSheetId = 1;
     this.timeZone = 'America/Los_Angeles';
     this.id = '1FakeSpreadsheetId_emulator';
   }
   getId() { return this.id; }
-  getSheetByName(name) { return this.sheets.get(name) || null; }
-  insertSheet(name) {
-    if (this.sheets.has(name)) throw new Error(`A sheet with the name "${name}" already exists.`);
+  getSheetByName(name) { return this.list.find((s) => s.name === name) || null; }
+  insertSheet(name, index) {
+    this.env.events.push({ type: 'insertSheet', name });
+    if (this.env.insertSheetThrows) throw new Error('Service Spreadsheets failed while accessing document.');
+    if (this.getSheetByName(name)) throw new Error(`A sheet with the name "${name}" already exists. Please enter another name.`);
     const s = new MockSheet(this, name);
-    this.sheets.set(name, s);
+    if (index === undefined) this.list.push(s);
+    else this.list.splice(index, 0, s);
     return s;
   }
-  getSheets() { return [...this.sheets.values()]; }
+  deleteSheet(sheet) { this.list = this.list.filter((s) => s !== sheet); }
+  getSheets() { return this.list.slice(); }
+  createDeveloperMetadataFinder() {
+    const crit = {};
+    const finder = {
+      withKey(k) { crit.key = k; return finder; },
+      withValue(v) { crit.value = String(v); return finder; },
+      find: () => {
+        this.env.events.push({ type: 'findMetadata' });
+        const out = [];
+        this.list.forEach((sheet) => sheet.metadata.forEach((m) => {
+          if ((crit.key === undefined || m.key === crit.key) && (crit.value === undefined || m.value === crit.value)) {
+            out.push({ getKey: () => m.key, getValue: () => m.value,
+              getLocation: () => ({ getLocationType: () => 'SHEET', getSheet: () => sheet }) });
+          }
+        }));
+        return out;
+      },
+    };
+    return finder;
+  }
   setSpreadsheetTimeZone(tz) { this.timeZone = tz; }
   getSpreadsheetTimeZone() { return this.timeZone; }
 }
@@ -211,8 +282,10 @@ function formatDate(date, tz, pattern) {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
   }).formatToParts(date).forEach((p) => { parts[p.type] = p.value; });
-  return pattern.replace(/yyyy|MM|dd|HH|mm|ss/g, (t) => ({
-    yyyy: parts.year, MM: parts.month, dd: parts.day, HH: parts.hour, mm: parts.minute, ss: parts.second,
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return pattern.replace(/yyyy|MMM|MM|dd|d|HH|mm|ss/g, (t) => ({
+    yyyy: parts.year, MMM: MONTHS[Number(parts.month) - 1], MM: parts.month, dd: parts.day, d: String(Number(parts.day)),
+    HH: parts.hour, mm: parts.minute, ss: parts.second,
   })[t]);
 }
 
@@ -279,6 +352,8 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
         return ss;
       },
       flush: () => env.events.push({ type: 'flush' }),
+      DeveloperMetadataVisibility: { DOCUMENT: 'DOCUMENT', PROJECT: 'PROJECT' },
+      DeveloperMetadataLocationType: { SHEET: 'SHEET', SPREADSHEET: 'SPREADSHEET', ROW: 'ROW', COLUMN: 'COLUMN' },
     },
     // The web app runs as its owner, so every request shares the owner's user lock: a second,
     // independent lock. userLockHeldElsewhere simulates it being busy.
@@ -305,6 +380,8 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
         },
         setProperty: (k, v) => { env.props[k] = String(v); },
         deleteProperty: (k) => { delete env.props[k]; },
+        getKeys: () => Object.keys(env.props),
+        getProperties: () => ({ ...env.props }),
       }),
     },
     Utilities: {

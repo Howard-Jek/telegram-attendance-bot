@@ -71,7 +71,7 @@ function bumpConfigCache_() {
 function cacheSessions_(sessions, nowMs) {
   const live = sessions.filter((s) => s.closesAt.getTime() > nowMs).map((s) => ({
     row: s.row, id: s.id, startedById: s.startedById, startedByName: s.startedByName,
-    opensAt: s.opensAt.getTime(), closesAt: s.closesAt.getTime(), status: s.status, count: s.count, site: s.site,
+    opensAt: s.opensAt.getTime(), closesAt: s.closesAt.getTime(), status: s.status, count: s.count,
   }));
   cachePutJson_(SESSIONS_CACHE_KEY_, live, CACHE_SEC_.SESSIONS);
 }

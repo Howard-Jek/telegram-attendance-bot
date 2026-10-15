@@ -5,8 +5,10 @@ reads the phone's GPS and records the check-in in a Google Sheet, with:
 
 - server time;
 - the member's verified Telegram identity;
-- their location;
+- how far they were from the check-in point (never where they were);
 - their rank and full name, and group.
+
+Each check-in also gets its own tab, listing who checked in.
 
 An admin opens a check-in session from the app. The place where the admin is standing becomes
 the check-in point, and members must be within 150 m of it (admins can change this, and how long
@@ -101,9 +103,15 @@ edit them there.
 | Tab | What's in it | Who writes it |
 |---|---|---|
 | **Config** | Settings (see below) | You. The bot fills in `GROUP_CHAT_ID`. |
-| **Sessions** | One row per session: who started it, times, check-in point, number checked in (updated every 5 minutes, final at close) | The bot |
-| **Log** | One row per check-in: time, Telegram name, location, distance, rank and full name (`full_name`), group | The bot |
+| **Sessions** | One row per session: who started it, times, GPS accuracy of the check-in point, number checked in (updated every 5 minutes, final at close) | The bot |
+| **Log** | One row per check-in: time, Telegram name, GPS accuracy, distance from the check-in point, rank and full name (`full_name`), group | The bot |
 | **Rejected** | Check-in attempts that were refused while a session was open, and why | The bot |
+| **One tab per check-in**, e.g. "19 Oct 2026 0830" | Who checked in: group, rank and full name, time, Telegram name and username, grouped in your Groups tab's order, with a count per group at the top. Updated every 5 minutes while the check-in is open, and a final time when it closes. The newest is the first tab. | The bot |
+
+**No exact locations are kept.** A phone's coordinates are used to measure how far it is from
+the check-in point, then dropped. The check-in point itself (where the admin stood) is kept out
+of the Sheet, in the script's private settings, and deleted when the check-in closes. So nobody
+reading the Sheet can tell where anyone was, or where the training took place.
 | **Groups** | Your groups, one per row under the `group` header. Leave it empty to skip the group question. | You |
 | **Members** | Each member's saved rank and full name, and group | The bot. You can correct names and groups here. |
 
@@ -113,10 +121,13 @@ edit them there.
 - Sort or filter the rows.
 - Add your own columns to the right of the last column.
 - Edit Config, Groups and Members.
+- Rename, move or delete a check-in's tab. While the check-in is open the bot keeps updating it
+  (renamed or not) and puts it back if deleted; once it has closed, the bot leaves it alone.
+  Edits you make to an open check-in's tab are replaced at the next update.
 
 **Breaks things**
 
-- Renaming or deleting any of these tabs.
+- Renaming or deleting Config, Sessions, Log, Rejected, Groups or Members.
 - Inserting, deleting or reordering columns inside them.
 
   When the bot finds a changed layout it stops and says so; it never writes rows into the
@@ -310,10 +321,15 @@ change automatically.
 - **Everything typed by members** is stored as plain text, so it can never run as a
   spreadsheet formula.
 - **What is stored:**
-  - The Log stores each check-in's location.
-  - The Rejected tab stores locations only for refusals caused by the location itself (too far
-    away, or too rough).
-  - People outside the group, or on desktop Telegram, are recorded without a location.
+  - No coordinates, anywhere in the Sheet. The Log and Rejected tabs keep the distance from
+    the check-in point and the GPS accuracy.
+  - The check-in point is kept in Script Properties (which only the script's owner can open)
+    while its check-in is open, and deleted when it closes.
+  - People outside the group, or on desktop Telegram, are recorded with no location details at
+    all.
+  - Sheets from before October 2026 held exact coordinates. `setup()` deletes those columns.
+    Earlier copies remain in **File → Version history**, which only editors can open; delete
+    old versions there if you need them gone too.
 - **Admins** get exact distances, and the Sheet keeps them; members only see rounded ones.
 - **Settings from the app** are limited to session length, distance and accuracy, within fixed
   ranges. Only admins can change them. The group, `ADMIN_IDS` and the Mini App link can only be
@@ -373,6 +389,7 @@ apps-script/       the backend (pushed with clasp)
   Sessions.gs        status, start, move the check-in point
   Checkin.gs         check-in rules and writes
   Profile.gs         groups, ranks and full names
+  SessionTabs.gs     the tab listing who checked in to each check-in
   Settings.gs        check-in settings admins change in the app
   Group.gs           the group's Check in button and the close job
   Webhook.gs         Telegram updates: /checkin, connecting the group, supergroup upgrades
