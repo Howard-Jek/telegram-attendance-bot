@@ -330,3 +330,11 @@ The owner reopened two of the decisions above. This section overrides the table 
   - Made at start, under the script lock and before the group is told; a failure is logged and the close job makes it later. Rewritten by the close job every run while open (from the Log, after releasing the lock), and once more when it closes; then left alone. Check-ins never write to it, so crowd throughput is unchanged; the cost is up to 5 minutes' lag while open.
   - Content: title, count with per-group breakdown (same order as the closing message: Groups tab, then others A–Z, then no group), status line, then Group / Rank and full name / Checked in at / Telegram name / Username, one row per person. User text goes through `textCell_`.
   - Sized to its rows and 5 columns, since a spreadsheet holds at most 10 million cells and a default tab is 26,000.
+  - *Review (2026-10-15), three reviewers plus a verifier per serious finding.* No blockers. Fixed, each with a test that fails without it:
+    - **Old venue rows.** `setup()` also deletes the September `SITE_LAT`/`SITE_LNG` Config rows, which held a venue's coordinates.
+    - **Final tab retries.** A failed final tab write is retried: `TAB_PENDING:<id>` is set when a session closes and cleared after a flushed write, and the job gives up after 24 h with a log line. A session that closed before its tab could be made gets one.
+    - **Rounded distances.** Rejected distances are rounded up to 50 m, as members are told, because exact ones from made-up locations could pinpoint the check-in point. Log distances are whole metres.
+    - **Migration order.** The migration does Sessions last, so a failure part-way leaves the bot refusing to write (every write checks Sessions first) until `setup()` is run again.
+    - **Start order.** The start saves the point before the session row. The start and the close job flush inside their tab `try`, so Sheets' deferred write errors are caught there.
+    - **Old-layout detection.** It needs both old headers, so a half-edited tab gets "columns were changed".
+    - **README.** Version history can't be cleared in Google Sheets, and column letters move when the old columns are deleted.

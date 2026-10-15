@@ -55,19 +55,22 @@ function handleStartSession_(ctx, body) {
       opensAt: now,
       closesAt: new Date(now.getTime() + cfg.sessionMinutes * 60 * 1000),
     };
+    // The point first: if it can't be saved, no session is opened without one (a point left
+    // behind by a failed row is removed by the close job).
+    saveSite_(session.id, site);
     const sheet = sheet_(SHEETS_.SESSIONS);
     sheet.appendRow([session.id, Number(user.id), textCell_(user.name), session.opensAt, session.closesAt,
       '', 'open', 0, round1_(site.accuracy)]);
     session.row = sheet.getLastRow();
     session.status = 'open';
     session.count = 0;
-    saveSite_(session.id, site);
     cacheSessions_(sessions.concat([session]), now.getTime());
     startCheckinsCopy_(session, now);
     // Its tab, made now (under the lock, so the close job can't make a second one) and before the
     // group is told, so nobody is queueing behind it yet. A failure must not stop the check-in.
     try {
       writeSessionTab_(ensureSessionTab_(session), session, [], readGroups_(), false);
+      SpreadsheetApp.flush(); // Sheets applies writes later; any error surfaces here, inside the try
     } catch (err) {
       console.warn('Could not make the session tab for ' + session.id + ' (the close job will try again): ' +
         redactSecrets_(String(err && err.message)));
@@ -222,7 +225,6 @@ function readSessions_() {
   const sheet = sheet_(SHEETS_.SESSIONS);
   const values = sheet.getRange(1, 1, Math.max(1, sheet.getLastRow()), HEADERS_.Sessions.length).getValues();
   assertHeaders_(SHEETS_.SESSIONS, values[0]);
-  const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
   const sessions = [];
   for (let i = 1; i < values.length; i++) {
     const r = values[i];

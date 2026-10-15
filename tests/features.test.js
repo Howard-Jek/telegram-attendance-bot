@@ -449,7 +449,8 @@ test('distance: members get a rounded distance, or none beyond 1 km; admins get 
   assert.doesNotMatch(JSON.stringify(res), /111\d/);
   const admin = env.checkin(ADMIN2, OFFSITE);
   assert.ok(admin.data.distanceM > 1100 && admin.data.distanceM < 1120, 'admins may need it to move the point');
-  assert.ok(env.records('Rejected').every((r) => typeof r.distance_m === 'number'), 'the Sheet keeps exact distances');
+  assert.ok(env.records('Rejected').every((r) => typeof r.distance_m === 'number' && r.distance_m % 50 === 0),
+    'the Sheet keeps distances rounded up to 50 m');
 });
 
 test('distance: after 10 out-of-range answers in a session, a member only hears in or out', () => {
@@ -820,7 +821,8 @@ test('setupSheets(): an existing Sheet from the first version gains the new colu
   assert.equal(cfg.find((r) => r[0] === 'GROUP_CHAT_ID')[1], BASIC_GROUP);
   assert.equal(String(cfg.find((r) => r[0] === 'ADMIN_IDS')[1]), '159911700');
   assert.ok(cfg.find((r) => r[0] === 'MINI_APP_LINK'), 'missing keys are added');
-  assert.ok(env.logs.some((l) => /SITE_LAT is no longer used/.test(l.text)));
+  assert.equal(cfg.some((r) => r[0] === 'SITE_LAT' || r[0] === 'SITE_LNG'), false, 'the old venue coordinates are deleted');
+  assert.ok(env.logs.some((l) => /Removed SITE_LAT/.test(l.text)));
   assert.doesNotThrow(() => env.eval('readSessions_()'));
 });
 

@@ -2,13 +2,44 @@
  * A tab for each check-in, named by its start time ("19 Oct 2026 0830") and listing who checked
  * in, grouped by the Groups tab's order. It is made when the check-in starts, refreshed by the
  * close job every 5 minutes while it is open (so check-ins never wait on it), and written a last
- * time when it closes; after that it is left alone. Each tab is tagged with its session's id, so
+ * time when it closes; after that it is left alone. Until that last write succeeds the session is
+ * marked TAB_PENDING:<id> in Script Properties, so a failed one is tried again on the next run. Each tab is tagged with its session's id, so
  * the owner can rename it, and a tab of their own with the same name is never written to.
  */
 
 const SESSION_TAB_KEY_ = 'checkinSessionId';
 const SESSION_TAB_COLUMNS_ = ['Group', 'Rank and full name', 'Checked in at', 'Telegram name', 'Username'];
 const SESSION_TAB_HEAD_ROWS_ = 5; // title, count, status, blank, column names
+const TAB_PENDING_PREFIX_ = 'TAB_PENDING:';
+const TAB_PENDING_GIVE_UP_MS_ = 24 * 60 * 60 * 1000;
+
+/**
+ * Call with the script lock held. Marks the sessions closing now as needing their final tab, and
+ * returns every closed session still needing one (a session deleted by hand, or closed more than
+ * a day ago, is dropped, with a log line for the latter).
+ */
+function pendingFinalTabs_(sessions, closingNow, nowMs) {
+  const props = PropertiesService.getScriptProperties();
+  closingNow.forEach((s) => props.setProperty(TAB_PENDING_PREFIX_ + s.id, '1'));
+  const byId = {};
+  sessions.forEach((s) => { byId[s.id] = s; });
+  const out = [];
+  props.getKeys().forEach((k) => {
+    if (k.indexOf(TAB_PENDING_PREFIX_) !== 0) return;
+    const s = byId[k.slice(TAB_PENDING_PREFIX_.length)];
+    if (s && nowMs - s.closesAt.getTime() <= TAB_PENDING_GIVE_UP_MS_) {
+      out.push(s);
+      return;
+    }
+    if (s) console.warn('Gave up writing the final list on the tab of ' + s.id + '; the Log has every check-in.');
+    props.deleteProperty(k);
+  });
+  return out;
+}
+
+function finalTabWritten_(sessionId) {
+  PropertiesService.getScriptProperties().deleteProperty(TAB_PENDING_PREFIX_ + sessionId);
+}
 
 function sessionTabName_(session) {
   return Utilities.formatDate(session.opensAt, TZ_, 'd MMM yyyy HHmm');
@@ -20,7 +51,7 @@ function findSessionTab_(sessionId) {
     .withKey(SESSION_TAB_KEY_).withValue(String(sessionId)).find();
   for (let i = 0; i < found.length; i++) {
     const where = found[i].getLocation();
-    if (where.getLocationType() === SpreadsheetApp.DeveloperMetadataLocationType.SHEET) return where.getSheet();
+    if (String(where.getLocationType()) === 'SHEET') return where.getSheet();
   }
   return null;
 }

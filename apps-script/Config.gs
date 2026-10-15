@@ -170,7 +170,12 @@ function assertHeaders_(name, headerRow) {
   const expected = HEADERS_[name];
   if (expected.every((h, i) => String(headerRow[i]).trim() === h)) return;
   const legacy = LEGACY_LOCATION_COLUMNS_[name];
-  if (legacy && String(headerRow[legacy.col - 1]).trim() === legacy.headers[0]) {
+  // Both old headers, as far as the caller read the row (Sessions reads only its current columns).
+  const isOld = legacy && legacy.headers.every((h, i) => {
+    const v = headerRow[legacy.col - 1 + i];
+    return v === undefined ? i > 0 : String(v).trim() === h;
+  });
+  if (isOld) {
     throw new SetupError_('The bot was updated. The owner needs to run setup() once in the Apps Script editor.');
   }
   // Columns added by an update are appended by setup(); until it runs, say that instead.

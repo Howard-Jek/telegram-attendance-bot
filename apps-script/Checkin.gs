@@ -93,7 +93,7 @@ function handleCheckin_(ctx, body) {
     const p = profile.profile;
     sheet_(SHEETS_.LOG).appendRow([now, session.id, Number(user.id), textCell_(user.firstName),
       textCell_(user.lastName), textCell_(user.username), round1_(loc.accuracy),
-      round1_(distance), key, textCell_(p ? p.fullName : ''), groupCell_(p ? p.group : '')]);
+      Math.round(distance), key, textCell_(p ? p.fullName : ''), groupCell_(p ? p.group : '')]);
     // checkin_count is left to the close job (refreshed every 5 minutes): one write per check-in
     // keeps the time each holds the lock, and so the queue in a crowd, as short as possible.
     SpreadsheetApp.flush(); // the copy may only say "checked in" once the row is really there
@@ -172,12 +172,16 @@ function haversineM_(lat1, lng1, lat2, lng2) {
   return 2 * EARTH_RADIUS_M_ * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
-/** loc and distance may be null (not measured, or deliberately not recorded). Never the coordinates. */
+/**
+ * loc and distance may be null (not measured, or deliberately not recorded). Never the coordinates.
+ * The distance is rounded up to 50 m, as the member is told: exact distances from made-up
+ * locations would let anyone who can read the Sheet pinpoint the check-in point.
+ */
 function appendRejected_(now, sessionId, user, reason, loc, distance) {
   sheet_(SHEETS_.REJECTED).appendRow([now, sessionId, Number(user.id), textCell_(user.name),
     textCell_(user.username), reason,
     loc && isFinite(loc.accuracy) ? round1_(loc.accuracy) : '',
-    distance === null ? '' : round1_(distance)]);
+    distance === null ? '' : Math.ceil(distance / 50) * 50]);
 }
 
 /**

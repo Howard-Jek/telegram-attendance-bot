@@ -140,6 +140,7 @@ class MockSheet {
     return this;
   }
   clearContents() { this.cells.clear(); return this; }
+  deleteRow(r) { return this.deleteRows(r, 1); }
   setColumnWidth() { return this; }
   setColumnWidths() { return this; }
   getFrozenRows() { return this.frozenRows; }
@@ -378,7 +379,10 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
           if (env.propsThrow) throw new Error('Service invoked too many times for one day: properties.');
           return k in env.props ? env.props[k] : null;
         },
-        setProperty: (k, v) => { env.props[k] = String(v); },
+        setProperty: (k, v) => {
+          if (env.setPropertyThrows && env.setPropertyThrows(k)) throw new Error('Service invoked too many times for one day: properties.');
+          env.props[k] = String(v);
+        },
         deleteProperty: (k) => { delete env.props[k]; },
         getKeys: () => Object.keys(env.props),
         getProperties: () => ({ ...env.props }),

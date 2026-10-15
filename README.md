@@ -107,13 +107,17 @@ edit them there.
 | **Log** | One row per check-in: time, Telegram name, GPS accuracy, distance from the check-in point, rank and full name (`full_name`), group | The bot |
 | **Rejected** | Check-in attempts that were refused while a session was open, and why | The bot |
 | **One tab per check-in**, e.g. "19 Oct 2026 0830" | Who checked in: group, rank and full name, time, Telegram name and username, grouped in your Groups tab's order, with a count per group at the top. Updated every 5 minutes while the check-in is open, and a final time when it closes. The newest is the first tab. | The bot |
+| **Groups** | Your groups, one per row under the `group` header. Leave it empty to skip the group question. | You |
+| **Members** | Each member's saved rank and full name, and group | The bot. You can correct names and groups here. |
 
 **No exact locations are kept.** A phone's coordinates are used to measure how far it is from
 the check-in point, then dropped. The check-in point itself (where the admin stood) is kept out
 of the Sheet, in the script's private settings, and deleted when the check-in closes. So nobody
 reading the Sheet can tell where anyone was, or where the training took place.
-| **Groups** | Your groups, one per row under the `group` header. Leave it empty to skip the group question. | You |
-| **Members** | Each member's saved rank and full name, and group | The bot. You can correct names and groups here. |
+
+Distances are kept to the whole metre for check-ins, and rounded up to the next 50 m on the
+Rejected tab (as the member is told), because exact distances from made-up locations could be
+used to work out where the check-in point is.
 
 **Safe to do**
 
@@ -301,6 +305,12 @@ never changes. After an update that adds tabs, columns or permissions, run `setu
 until you do, the app says so. Mini App changes go live when they're pushed to `main`, and
 phones may keep the old page for up to 10 minutes.
 
+**The October 2026 update** (no coordinates in the Sheet; a tab per check-in) needs `setup()`
+once, at a time when no check-in is open. It deletes the latitude/longitude columns, so on the
+Log and Rejected tabs every column from G onwards moves two to the left, and on Sessions every
+column from I onwards does. Formulas you wrote elsewhere that name those columns by letter (or
+import them) need checking. Until `setup()` has run, the app says "The bot was updated".
+
 To move the bot to another group:
 
 1. Clear `GROUP_CHAT_ID` in Config.
@@ -327,10 +337,13 @@ change automatically.
     while its check-in is open, and deleted when it closes.
   - People outside the group, or on desktop Telegram, are recorded with no location details at
     all.
-  - Sheets from before October 2026 held exact coordinates. `setup()` deletes those columns.
-    Earlier copies remain in **File → Version history**, which only editors can open; delete
-    old versions there if you need them gone too.
-- **Admins** get exact distances, and the Sheet keeps them; members only see rounded ones.
+  - Sheets from before October 2026 held exact coordinates. `setup()` deletes those columns, and
+    the old `SITE_LAT`/`SITE_LNG` Config rows. Earlier copies remain in **File → Version
+    history**, which only editors can open and which Google Sheets doesn't let anyone clear. So
+    keep everyone except yourself at *Viewer*. The only way to drop that history is to start a
+    fresh copy of the Sheet, which means setting the bot up again from step 2.
+- **Admins** see exact distances in the app; members only see rounded ones, and so does the
+  Rejected tab.
 - **Settings from the app** are limited to session length, distance and accuracy, within fixed
   ranges. Only admins can change them. The group, `ADMIN_IDS` and the Mini App link can only be
   changed in the Sheet. Each change is logged with the admin's Telegram ID (Apps Script →

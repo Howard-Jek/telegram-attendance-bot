@@ -89,6 +89,25 @@ test('locations: a check-in point left behind (its session row deleted by hand) 
   assert.equal(env.props.BOT_TOKEN, TOKEN);
 });
 
+test('locations: distances are kept whole (accepted) or rounded up to 50 m (too far), never to the centimetre', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER, ONSITE); // ~55.6 m
+  env.checkin(MEMBER2, { lat: SITE.lat + 0.001439, lng: SITE.lng, accuracy: 20 }); // ~160 m
+  assert.equal(env.records('Log')[0].distance_m, 56);
+  assert.equal(env.records('Rejected')[0].distance_m, 200);
+});
+
+test('locations: if the check-in point can\'t be saved, no check-in is left open without one', () => {
+  const env = setup();
+  env.setPropertyThrows = (k) => k.startsWith('SITE:');
+  assert.equal(env.start(ADMIN).code, 'SERVER_ERROR');
+  assert.equal(env.rows('Sessions').length, 0);
+  env.setPropertyThrows = null;
+  assert.equal(env.start(ADMIN).code, 'SESSION_STARTED');
+  assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN');
+});
+
 test('locations: a lost check-in point (properties cleared) says so instead of failing silently', () => {
   const env = setup();
   env.start(ADMIN);
@@ -156,6 +175,54 @@ test('migration: setup() deletes the old coordinates, keeps everything else, and
   assert.equal(env.checkin(MEMBER2).code, 'CHECKED_IN');
   assert.equal(env.checkin(MEMBER).code, 'ALREADY_CHECKED_IN', 'the old Log row is still found');
   assert.ok(env.logs.some((l) => /Removed the latitude and longitude columns from Log/.test(l.text)));
+});
+
+test('migration: the old venue coordinates in Config (SITE_LAT, SITE_LNG) are deleted too', () => {
+  const env = septemberSheet();
+  const cfg = env.sheet('Config');
+  cfg.appendRow(['SITE_LAT', '1.28340']);
+  cfg.appendRow(['SITE_LNG', '103.86070']);
+  cfg.appendRow(['ADMIN_IDS', '']);
+  env.call('setupSheets');
+  const keys = env.rows('Config').map((r) => r[0]);
+  assert.equal(keys.includes('SITE_LAT') || keys.includes('SITE_LNG'), false);
+  assert.ok(keys.includes('RADIUS_M') && keys.includes('GROUP_CHAT_ID'), 'other rows kept');
+  assertNoCoordinates(env, [{ lat: 1.2834, lng: 103.8607 }]);
+});
+
+test('migration: columns the owner added on the right are kept, with their data', () => {
+  const env = septemberSheet();
+  const log = env.sheet('Log');
+  log.getRange(1, 14).setValue('notes');
+  log.getRange(2, 14).setValue('was late');
+  env.call('setupSheets');
+  assert.deepEqual(log.getRange(1, 9, 2, 4).getValues(),
+    [['dedupe_key', 'full_name', 'group', 'notes'], ['S-20260920-0900:' + MEMBER.id, 'Cy Tan', 'Alpha', 'was late']]);
+});
+
+test('migration: if setup() fails part-way, check-ins stay stopped, and running it again finishes cleanly', () => {
+  const env = septemberSheet();
+  const real = env.sheet('Rejected').deleteColumns.bind(env.sheet('Rejected'));
+  let failed = false;
+  env.sheet('Rejected').deleteColumns = (...a) => { if (!failed) { failed = true; throw new Error('Service Spreadsheets timed out.'); } return real(...a); };
+  // Whatever order the tabs are done in, a failure must leave the bot refusing to write.
+  try { env.call('setupSheets'); } catch (e) { /* the owner sees the error */ }
+  const r = env.checkin(MEMBER2, OFFSITE);
+  assert.equal(r.code, 'SERVER_ERROR', 'no rows written into half-migrated tabs');
+  env.call('setupSheets');
+  assert.equal(env.checkin(MEMBER2, OFFSITE).code, 'OUT_OF_RANGE');
+  assert.deepEqual(env.records('Rejected').map((x) => [x.reason, x.accuracy_m, x.distance_m]),
+    [['OUT_OF_RANGE', 20, 1113.2], ['NOT_MEMBER', '', ''], ['OUT_OF_RANGE', 20, 1150]]);
+});
+
+test('migration: a tab with only one of the two old columns is "changed", not "run setup()" forever', () => {
+  const env = septemberSheet();
+  env.sheet('Log').deleteColumns(8, 1); // the owner deleted longitude by hand
+  env.call('setupSheets'); // migrates the other tabs, and leaves a Log it doesn't recognise alone
+  assert.equal(env.sheet('Log').getRange(1, 7).getValue(), 'latitude');
+  const r = env.checkin(MEMBER2);
+  assert.equal(r.code, 'SERVER_ERROR');
+  assert.match(r.message, /columns were changed/);
 });
 
 test('migration: running setup() again changes nothing', () => {
@@ -302,6 +369,48 @@ test('session tab: if it can\'t be made, the check-in still starts, and the clos
   env.insertSheetThrows = false;
   assert.equal(env.checkin(MEMBER).code, 'CHECKED_IN');
   close(env);
+  assert.equal(people(env).length, 1);
+});
+
+test('session tab: if the final update fails, the next run writes it (and only then leaves the tab alone)', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.setNow(T0 + 60 * MIN);
+  env.eval('var realWrite_ = writeSessionTab_; writeSessionTab_ = function () { throw new Error("Service Spreadsheets timed out."); };');
+  close(env);
+  assert.match(tabRows(env)[2][0], /Updates every 5 minutes/, 'still the snapshot from the start');
+  env.eval('writeSessionTab_ = realWrite_;');
+  env.setNow(T0 + 65 * MIN);
+  close(env);
+  assert.match(tabRows(env)[2][0], /Final list/);
+  assert.equal(people(env).length, 1);
+  assert.equal(Object.keys(env.props).filter((k) => k.startsWith('TAB_PENDING:')).length, 0);
+});
+
+test('session tab: a final update still failing a day later is given up (logged), not retried forever', () => {
+  const env = setup();
+  env.start(ADMIN);
+  env.setNow(T0 + 60 * MIN);
+  env.eval('writeSessionTab_ = function () { throw new Error("broken"); };');
+  close(env);
+  env.setNow(T0 + 60 * MIN + 25 * 60 * MIN);
+  close(env);
+  assert.equal(Object.keys(env.props).filter((k) => k.startsWith('TAB_PENDING:')).length, 0);
+  assert.ok(env.logs.some((l) => /gave up/i.test(l.text)), JSON.stringify(env.logs.map((l) => l.text)));
+});
+
+test('session tab: a check-in that closed before its tab could be made gets one, with the final list', () => {
+  const env = setup();
+  env.insertSheetThrows = true;
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.setNow(T0 + 60 * MIN);
+  close(env);
+  env.insertSheetThrows = false;
+  env.setNow(T0 + 65 * MIN);
+  close(env);
+  assert.match(tabRows(env)[2][0], /Final list/);
   assert.equal(people(env).length, 1);
 });
 

@@ -523,7 +523,7 @@ test('geofence boundary: ~140 m accepted, ~160 m rejected (RADIUS_M 150)', () =>
   assert.equal(inside.code, 'CHECKED_IN');
   const outside = env.checkin(MEMBER2, { lat: SITE.lat + 0.001439, lng: SITE.lng, accuracy: 20 });
   assert.equal(outside.code, 'OUT_OF_RANGE');
-  assert.equal(env.records('Rejected')[0].distance_m, 160, 'the exact distance is kept in the Sheet');
+  assert.equal(env.records('Rejected')[0].distance_m, 200, 'rounded up to 50 m, as members are told (exact, it could help locate the point)');
 });
 
 test('checkin_count counts every accepted check-in', () => {

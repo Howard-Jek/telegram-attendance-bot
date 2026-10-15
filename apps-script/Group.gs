@@ -84,19 +84,23 @@ function closeExpiredSessions_() {
     cacheSessions_(sessions, now.getTime()); // every run refreshes the copy, picking up hand edits
     pruneSites_(sessions, now.getTime());
     const open = sessions.filter((s) => s.status === 'open');
-    if (!open.length) return { closed: [], tabs: [] };
-    const tally = tallyLog_(open.map((s) => s.id));
     const due = open.filter((s) => s.closesAt.getTime() <= now.getTime());
-    // Each open session's tab, made here if it's missing (under the lock, so only once); filled in
-    // below, after the lock is released, so check-ins don't wait on it.
+    const finals = pendingFinalTabs_(sessions, due, now.getTime()); // includes the due ones
+    const live = open.filter((s) => due.indexOf(s) === -1);
+    if (!live.length && !finals.length) return { closed: [], tabs: [] };
+    const tally = tallyLog_(live.concat(finals).map((s) => s.id));
+    // Each tab, made here if it's missing (under the lock, so only once); filled in below, after
+    // the lock is released, so check-ins don't wait on it.
     const tabs = [];
-    open.forEach((s) => {
+    live.concat(finals).forEach((s) => {
+      s.tally = tally[s.id];
       try {
-        tabs.push({ session: s, sheet: ensureSessionTab_(s), final: due.indexOf(s) !== -1 });
+        tabs.push({ session: s, sheet: ensureSessionTab_(s), final: finals.indexOf(s) !== -1 });
       } catch (err) {
         console.warn('Could not find or make the session tab for ' + s.id + ': ' + redactSecrets_(String(err && err.message)));
       }
     });
+    if (!open.length) return { closed: [], tabs: tabs };
     const sheet = sheet_(SHEETS_.SESSIONS);
     open.forEach((s) => {
       s.tally = tally[s.id];
@@ -113,10 +117,11 @@ function closeExpiredSessions_() {
   });
   if (!done) return; // lock busy: the next run picks it up
   if (done.tabs.length) {
-    const groupOrder = readGroups_();
     done.tabs.forEach((t) => {
       try {
-        writeSessionTab_(t.sheet, t.session, t.session.tally.people, groupOrder, t.final);
+        writeSessionTab_(t.sheet, t.session, t.session.tally.people, readGroups_(), t.final);
+        SpreadsheetApp.flush(); // Sheets applies writes later; any error surfaces here, inside the try
+        if (t.final) finalTabWritten_(t.session.id);
       } catch (err) {
         console.warn('Could not update the session tab for ' + t.session.id + ': ' + redactSecrets_(String(err && err.message)));
       }

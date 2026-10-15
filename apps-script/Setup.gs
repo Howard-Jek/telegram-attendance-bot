@@ -56,9 +56,6 @@ function setupSheets() {
   Object.keys(CONFIG_DEFAULTS_).forEach((key) => {
     if (existing.indexOf(key) === -1) config.appendRow([key, String(CONFIG_DEFAULTS_[key])]);
   });
-  ['SITE_LAT', 'SITE_LNG'].forEach((key) => {
-    if (existing.indexOf(key) !== -1) Logger.log(key + ' is no longer used (each check-in is centred on the admin who starts it). You can delete that Config row.');
-  });
 
   const stamp = 'yyyy-mm-dd hh:mm:ss';
   const sessions = ss.getSheetByName(SHEETS_.SESSIONS);
@@ -99,10 +96,12 @@ function ensureConnectCode_() {
 }
 
 /**
- * Versions before October 2026 kept each check-in's latitude and longitude (Log, Rejected) and the
- * check-in point (Sessions). This deletes those columns; an open session's point moves to Script
- * Properties first, so it carries on. Under the script lock, so no check-in writes mid-way.
- * Run again, it finds nothing to do.
+ * Versions before October 2026 kept each check-in's latitude and longitude (Log, Rejected), the
+ * check-in point (Sessions), and before that a fixed venue (Config SITE_LAT, SITE_LNG). This
+ * deletes them; an open session's point moves to Script Properties first, so it carries on.
+ * Under the script lock, so no check-in writes mid-way. Sessions goes last: every write checks the
+ * Sessions header first, so if this stops part-way the bot keeps refusing to write until it is run
+ * again. Run again, it finishes what's left, or finds nothing to do.
  */
 function removeStoredLocations_(ss) {
   const legacy = (name) => {
@@ -112,9 +111,21 @@ function removeStoredLocations_(ss) {
     const found = sheet.getRange(1, spec.col, 1, 2).getValues()[0].map((v) => String(v).trim());
     return found[0] === spec.headers[0] && found[1] === spec.headers[1] ? sheet : null;
   };
-  const names = Object.keys(LEGACY_LOCATION_COLUMNS_);
-  if (!names.some(legacy)) return;
+  const venueRows = () => {
+    const config = ss.getSheetByName(SHEETS_.CONFIG);
+    if (!config || config.getLastRow() < 1) return [];
+    return config.getRange(1, 1, config.getLastRow(), 1).getValues()
+      .map((r, i) => (['SITE_LAT', 'SITE_LNG'].indexOf(String(r[0]).trim()) !== -1 ? i + 1 : 0)).filter(Boolean);
+  };
+  const names = [SHEETS_.LOG, SHEETS_.REJECTED, SHEETS_.SESSIONS];
+  if (!names.some(legacy) && !venueRows().length) return;
   const done = withScriptLock_(() => {
+    const rows = venueRows();
+    rows.reverse().forEach((r) => ss.getSheetByName(SHEETS_.CONFIG).deleteRow(r));
+    if (rows.length) {
+      bumpConfigCache_();
+      Logger.log('Removed SITE_LAT and SITE_LNG from Config: they held a fixed venue, which isn’t used any more.');
+    }
     names.forEach((name) => {
       const sheet = legacy(name);
       if (!sheet) return;
