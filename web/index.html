@@ -1248,6 +1248,11 @@
       help: 'A higher number lets more phones through. Raise it if members indoors are told their location isn’t precise enough.' },
   ];
 
+  // The settings this server has (an older one sends no lateMinutes, and has nothing to save it to).
+  function shownSettings() {
+    return SETTINGS.filter(function (f) { return status && f.name in status; });
+  }
+
   function settingFor(name) {
     return SETTINGS.filter(function (f) { return f.name === name; })[0];
   }
@@ -1291,7 +1296,7 @@
     settingsBack = back;
     settingsFrom = {};
     settingsDraft = {};
-    SETTINGS.forEach(function (f) {
+    shownSettings().forEach(function (f) {
       settingsFrom[f.name] = typeof status[f.name] === 'number' ? String(status[f.name]) : '';
       settingsDraft[f.name] = settingsFrom[f.name];
     });
@@ -1325,7 +1330,8 @@
       notice.tabIndex = -1;
       box.appendChild(notice);
     }
-    SETTINGS.forEach(function (f, i) {
+    var fields = shownSettings();
+    fields.forEach(function (f, i) {
       var field = el('div', 'field');
       var label = el('label', 'picker-q', f.label);
       label.htmlFor = f.id;
@@ -1338,7 +1344,7 @@
       input.maxLength = 4;
       input.autocomplete = 'off';
       input.spellcheck = false;
-      input.setAttribute('enterkeyhint', i < SETTINGS.length - 1 ? 'next' : 'done');
+      input.setAttribute('enterkeyhint', i < fields.length - 1 ? 'next' : 'done');
       input.value = settingsDraft[f.name];
       var described = f.help ? [f.id + '-help'] : [];
       if (settingsErrors[f.name]) {
@@ -1351,7 +1357,7 @@
       input.addEventListener('keydown', function (e) {
         if (e.key !== 'Enter') return;
         e.preventDefault();
-        var next = SETTINGS[i + 1] && document.getElementById(SETTINGS[i + 1].id);
+        var next = fields[i + 1] && document.getElementById(fields[i + 1].id);
         if (next) next.focus(); else input.blur();
       });
       row.appendChild(input);
@@ -1407,7 +1413,7 @@
     var changed = 0;
     settingsErrors = {};
     settingsNotice = '';
-    SETTINGS.forEach(function (f) {
+    shownSettings().forEach(function (f) {
       var v = wholeNumber(settingsDraft[f.name]);
       var from = settingsFrom[f.name];
       if (from === '' ? String(settingsDraft[f.name]).trim() === '' : v === Number(from)) return; // unchanged ("0150" is 150)
@@ -1416,7 +1422,7 @@
       changed++;
     });
     if (!changed) return closeSettings();
-    var bad = SETTINGS.filter(function (f) { return settingsErrors[f.name]; });
+    var bad = shownSettings().filter(function (f) { return settingsErrors[f.name]; });
     if (bad.length) {
       render(views.settings());
       statusEl.textContent = settingsErrors[bad[0].name];
@@ -1453,7 +1459,7 @@
       closingGuard(false);
       if (res.code === 'SETTINGS_SAVED') {
         haptic('success');
-        SETTINGS.forEach(function (f) { status[f.name] = res.data[f.name]; });
+        shownSettings().forEach(function (f) { status[f.name] = res.data[f.name]; });
         justSaved = { sent: sent, now: res.data };
         closeSettings(true);
         focusFirst('#screen .title'); // the Save button focus went with the old screen
@@ -1469,7 +1475,7 @@
       else if (res.code === 'BUSY') settingsNotice = 'Busy right now: lots of people are checking in. Try again in a moment.';
       else settingsNotice = res.message;
       render(views.settings());
-      var first = SETTINGS.filter(function (f) { return settingsErrors[f.name]; })[0];
+      var first = shownSettings().filter(function (f) { return settingsErrors[f.name]; })[0];
       statusEl.textContent = first ? settingsErrors[first.name] : settingsNotice;
       focusFirst(first ? '#' + first.id : '#settings-error');
     });
