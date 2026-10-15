@@ -379,3 +379,107 @@ test('setup: sessions from before late check-ins (no late_until) simply have non
   at(env, 61);
   assert.equal(env.checkin(MEMBER2).code, 'NO_ACTIVE_SESSION');
 });
+
+// ---------- review fixes ----------
+
+test('roll: a name corrected on the Members tab counts for the check-in in progress', () => {
+  const env = lateSetup({ groups: ['Alpha'] });
+  const roll = addRoll(env, [[1, 'CPL', 'TAN WEI MING', 'SIG']]);
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.saveProfile(MEMBER, 'Wei Ming', 'Alpha', 'CPL'); // a typo
+  const members = env.sheet('Members');
+  members.getRange(2, 2).setValue('Tan Wei Ming'); // the owner corrects it
+  at(env, 65);
+  close(env);
+  assert.equal(rollState(roll).rows[0].colour, GREEN);
+  const tab = env.sheet('21 Sep 2026 1030');
+  assert.deepEqual(tab.getRange(6, 3).getValue(), 'Tan Wei Ming');
+  assert.equal(tab.getRange(6, 8).getValue(), 'Yes');
+});
+
+test('roll: a first-timer who saves their name just after the late window still matches', () => {
+  const env = lateSetup({ groups: ['Alpha'] });
+  const roll = addRoll(env, [[1, 'CPL', 'TAN WEI MING', 'SIG']]);
+  env.start(ADMIN);
+  env.setNow(T0 + 120 * MIN - 20000);
+  env.checkin(MEMBER); // 12:29:55, late
+  env.setNow(T0 + 120 * MIN + 20000);
+  assert.equal(env.saveProfile(MEMBER, 'Tan Wei Ming', 'Alpha', 'CPL').code, 'PROFILE_SAVED');
+  close(env);
+  assert.equal(rollState(roll).rows[0].colour, YELLOW);
+});
+
+test('close: a session stuck open for over a day doesn\'t stop the close job handling the live one', () => {
+  const env = lateSetup();
+  env.sheet('Sessions').appendRow(['S-20260920-0900', ADMIN.id, 'Ada Admin', new Date(T0 - 30 * 60 * MIN), new Date(T0 - 29 * 60 * MIN),
+    '', 'open', 0, 12, new Date(T0 - 28 * 60 * MIN)]);
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  close(env);
+  assert.ok(!env.logs.some((l) => /closeExpiredSessions:/.test(l.text)), JSON.stringify(env.logs.map((l) => l.text)));
+  const [old, live] = env.records('Sessions');
+  assert.equal(old.status, 'closed');
+  assert.equal(live.checkin_count, 1);
+});
+
+test('late: refusals during the late window name when late check-ins end', () => {
+  const env = lateSetup();
+  env.start(ADMIN);
+  at(env, 70);
+  assert.match(env.req('saveSettings', ADMIN2, { radiusM: 900 }).message, /until late check-ins end at 12:30/);
+  assert.match(env.req('moveSite', ADMIN2, { location: SITE_FIX }).message, /until late check-ins end at 12:30/);
+  at(env, 10); // on time, but the lock lasts through the late window
+  assert.match(env.req('saveSettings', ADMIN2, { radiusM: 900 }).message, /until late check-ins end at 12:30/);
+});
+
+test('late: if the new check-in can\'t be saved, the old late window carries on', () => {
+  const env = lateSetup();
+  env.start(ADMIN);
+  at(env, 70);
+  env.setPropertyThrows = (k) => k.startsWith('SITE:');
+  assert.equal(env.start(ADMIN2).code, 'SERVER_ERROR');
+  env.setPropertyThrows = null;
+  assert.equal(env.records('Sessions')[0].late_until.getTime(), T0 + 120 * MIN);
+  assert.equal(env.checkin(MEMBER).data.late, true);
+});
+
+test('roll: the same name twice is flagged, not coloured; rows with no name keep the owner\'s colours', () => {
+  const env = lateSetup();
+  const roll = addRoll(env, [[1, 'CPL', 'CY MEMBER', 'SIG'], [2, 'LCP', 'Cy Member', 'SIG'], ['', '', '', 'Remarks']]);
+  roll.getRange(4, 1, 1, 4).setBackground('#cccccc');
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.saveProfile(MEMBER, 'Cy Member', '', 'CPL');
+  close(env);
+  const st = rollState(roll);
+  assert.deepEqual(st.rows.slice(0, 2).map((r) => [r.status, r.colour]),
+    [['Same name twice on the roll', '#ffffff'], ['Same name twice on the roll', '#ffffff']]);
+  assert.equal(st.rows[2].colour, '#cccccc');
+  assert.ok(env.logs.some((l) => /same name on more than one row/.test(l.text)));
+});
+
+test('roll: a new check-in started while the close job is writing keeps the roll on the new one', () => {
+  const env = lateSetup();
+  const roll = addRoll(env, [[1, 'CPL', 'CY MEMBER', 'SIG']]);
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.saveProfile(MEMBER, 'Cy Member', '', 'CPL');
+  at(env, 70);
+  env.context.__beforeRoll = () => env.start(ADMIN2); // lands after the close job let go of the lock
+  env.eval('var realReadRoll_ = readRoll_; readRoll_ = function () { var h = globalThis.__beforeRoll; globalThis.__beforeRoll = null; if (h) h(); return realReadRoll_(); };');
+  close(env);
+  const st = rollState(roll);
+  assert.equal(st.header[4], 'Latest check-in: 21 Sep 2026 1140');
+  assert.deepEqual([st.rows[0].status, st.rows[0].colour], ['Not yet', '#ffffff']);
+});
+
+test('roll: reset at start happens after the check-in lock is let go', () => {
+  const env = lateSetup();
+  addRoll(env, [[1, 'CPL', 'CY MEMBER', 'SIG']]);
+  env.events.length = 0;
+  env.start(ADMIN);
+  const unlockAt = env.events.findIndex((e) => e.type === 'unlock');
+  const rollWriteAt = env.events.findIndex((e) => e.type === 'write' && e.sheet === 'Nominal Roll');
+  assert.ok(rollWriteAt > unlockAt && unlockAt !== -1, JSON.stringify(env.events.map((e) => e.type + (e.sheet ? ':' + e.sheet : ''))));
+});

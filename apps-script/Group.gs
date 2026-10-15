@@ -91,12 +91,14 @@ function closeExpiredSessions_() {
     const finals = pendingFinalTabs_(sessions, ending, nowMs); // includes the ending ones
     const live = running.filter((s) => ending.indexOf(s) === -1);
     if (!live.length && !finals.length) return { tabs: [] };
-    const tally = tallyLog_(live.concat(finals).map((s) => s.id));
+    // Every running session is tallied (its count is written below), and every one whose tab is written.
+    const counted = running.concat(finals.filter((s) => running.indexOf(s) === -1));
+    const tally = tallyLog_(counted.map((s) => s.id));
+    counted.forEach((s) => { s.tally = tally[s.id]; });
     // Each tab, made here if it's missing (under the lock, so only once); filled in below, after
     // the lock is released, so check-ins don't wait on it.
     const tabs = [];
     live.concat(finals).forEach((s) => {
-      s.tally = tally[s.id];
       try {
         tabs.push({ session: s, sheet: ensureSessionTab_(s), final: finals.indexOf(s) !== -1 });
       } catch (err) {
@@ -131,11 +133,23 @@ function closeExpiredSessions_() {
   if (!done) return; // lock busy: the next run picks it up
 
   if (done.tabs.length) {
+    // Names as the Members tab has them now: corrected by the owner, or saved after the late window.
+    let members = {};
+    try {
+      members = readMembersById_();
+    } catch (err) {
+      console.warn('Could not read the Members tab: ' + redactSecrets_(String(err && err.message)));
+    }
+    done.tabs.forEach((t) => { t.people = withMemberNames_(t.session.tally.people, members); });
     let roll = null;
     try {
       roll = readRoll_();
-      if (roll && done.rollSession) {
-        writeRollColours_(roll, done.rollSession, done.rollSession.tally.people, nowMs);
+      // A check-in started since the lock was let go has reset the roll for itself: leave it.
+      const newestNow = latestStarted_(sessionsForRead_());
+      const stillNewest = !newestNow || !done.rollSession || newestNow.id === done.rollSession.id;
+      if (roll && done.rollSession && stillNewest) {
+        const own = done.tabs.filter((t) => t.session === done.rollSession)[0];
+        writeRollColours_(roll, done.rollSession, own.people, nowMs);
         SpreadsheetApp.flush();
       }
     } catch (err) {
@@ -143,7 +157,7 @@ function closeExpiredSessions_() {
     }
     done.tabs.forEach((t) => {
       try {
-        writeSessionTab_(t.sheet, t.session, t.session.tally.people, readGroups_(), t.final, roll);
+        writeSessionTab_(t.sheet, t.session, t.people, readGroups_(), t.final, roll);
         SpreadsheetApp.flush(); // Sheets applies writes later; any error surfaces here, inside the try
         if (t.final) finalTabWritten_(t.session.id);
       } catch (err) {

@@ -21,7 +21,9 @@ const TAB_PENDING_GIVE_UP_MS_ = 24 * 60 * 60 * 1000;
  */
 function pendingFinalTabs_(sessions, closingNow, nowMs) {
   const props = PropertiesService.getScriptProperties();
-  closingNow.forEach((s) => props.setProperty(TAB_PENDING_PREFIX_ + s.id, '1'));
+  closingNow.forEach((s) => {
+    if (nowMs - s.lateUntil.getTime() <= TAB_PENDING_GIVE_UP_MS_) props.setProperty(TAB_PENDING_PREFIX_ + s.id, '1');
+  });
   const byId = {};
   sessions.forEach((s) => { byId[s.id] = s; });
   const out = [];

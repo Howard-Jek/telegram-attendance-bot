@@ -120,6 +120,36 @@ function findMember_(userId) {
   return null;
 }
 
+/** {userId: {fullName, rank, group}} for everyone on the Members tab (the close job's view of names). */
+function readMembersById_() {
+  const sheet = sheet_(SHEETS_.MEMBERS);
+  const values = sheet.getRange(1, 1, Math.max(1, sheet.getLastRow()), HEADERS_.Members.length).getValues();
+  assertHeaders_(SHEETS_.MEMBERS, values[0]);
+  const out = {};
+  for (let i = 1; i < values.length; i++) {
+    const id = String(values[i][MEMBER_COL_.USER_ID - 1]).trim();
+    if (!id) continue;
+    out[id] = {
+      fullName: String(values[i][MEMBER_COL_.FULL_NAME - 1]).trim(),
+      rank: String(values[i][MEMBER_COL_.RANK - 1]).trim(),
+      group: String(values[i][MEMBER_COL_.GROUP - 1]).trim(),
+    };
+  }
+  return out;
+}
+
+/**
+ * Check-ins (tallyLog_ people) with each person's name and rank as the Members tab has them now,
+ * falling back to the Log's. The group stays the one they checked in under, unless that was blank.
+ */
+function withMemberNames_(people, members) {
+  return people.map((p) => {
+    const m = members[p.userId];
+    if (!m) return p;
+    return Object.assign({}, p, { fullName: m.fullName || p.fullName, rank: m.rank || p.rank, group: p.group || m.group });
+  });
+}
+
 /** Call with the profile lock held (withProfileLock_). */
 function upsertMember_(user, rank, fullName, group, now) {
   const sheet = sheet_(SHEETS_.MEMBERS);

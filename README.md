@@ -124,8 +124,12 @@ edit them there.
 words appear, ignoring capitals, punctuation, extra spaces and word order, and a rank typed in front
 of the name. So "Marcus Chen Feng" matches "CHEN FENG, MARCUS", but "Tan Wei Meng" doesn't match
 "Tan Wei Ming". On a check-in's tab, **On nominal roll: No** shows who checked in under a name the
-roll doesn't have; correct the name on the Members tab (or on the roll) and the next update picks it
-up.
+roll doesn't have; correct the name on the Members tab (or on the roll) and the next update, within
+5 minutes, picks it up, while the check-in is still open or within a day of it closing.
+
+On the roll, leave the Name cell empty on heading rows (e.g. "HQ PLATOON") and remarks; rows with
+no name keep their own colours. Two rows with the same name aren't coloured (a check-in can't say
+which of the two it was): they say "Same name twice on the roll" instead.
 
 **No exact locations are kept.** A phone's coordinates are used to measure how far it is from
 the check-in point, then dropped. The check-in point itself (where the admin stood) is kept out

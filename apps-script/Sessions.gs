@@ -51,13 +51,9 @@ function handleStartSession_(ctx, body) {
       cacheSessions_(sessions, now.getTime());
       return { blocking: blocking };
     }
-    // One in its late window doesn't: the new session ends that window now.
+    // One in its late window doesn't: the new session ends that window (below, once it is saved).
     const sheet = sheet_(SHEETS_.SESSIONS);
     const ending = findActiveSession_(sessions, now.getTime());
-    if (ending) {
-      sheet.getRange(ending.row, SESSION_COL_.LATE_UNTIL).setValue(now);
-      ending.lateUntil = now;
-    }
 
     const closesAt = new Date(now.getTime() + cfg.sessionMinutes * 60 * 1000);
     const session = {
@@ -74,6 +70,10 @@ function handleStartSession_(ctx, body) {
     sheet.appendRow([session.id, Number(user.id), textCell_(user.name), session.opensAt, session.closesAt,
       '', 'open', 0, round1_(site.accuracy), session.lateUntil]);
     session.row = sheet.getLastRow();
+    if (ending) {
+      sheet.getRange(ending.row, SESSION_COL_.LATE_UNTIL).setValue(now);
+      ending.lateUntil = now;
+    }
     session.status = 'open';
     session.count = 0;
     cacheSessions_(sessions.concat([session]), now.getTime());
@@ -86,14 +86,6 @@ function handleStartSession_(ctx, body) {
     } catch (err) {
       console.warn('Could not make the session tab for ' + session.id + ' (the close job will try again): ' +
         redactSecrets_(String(err && err.message)));
-    }
-    // The Nominal Roll starts again for the new session (no colours until someone checks in).
-    try {
-      const roll = readRoll_();
-      if (roll) writeRollColours_(roll, session, [], now.getTime());
-      SpreadsheetApp.flush();
-    } catch (err) {
-      console.warn('Could not reset the Nominal Roll tab: ' + redactSecrets_(String(err && err.message)));
     }
     return { session: session, endedLateOf: ending ? ending.startedByName : null };
   });
@@ -108,8 +100,17 @@ function handleStartSession_(ctx, body) {
       'A check-in is already open until ' + hhmm_(b.closesAt) + ', started by ' + b.startedByName + '.', view);
   }
 
-  // Announce in the group outside the lock: it is a network call, and a failure must not undo the session.
+  // The Nominal Roll starts again for the new session (no colours until someone checks in). Outside
+  // the lock: late check-ins of the session this one ended may be queueing for it.
   const s = result.session;
+  try {
+    const roll = readRoll_();
+    if (roll) writeRollColours_(roll, s, [], s.opensAt.getTime());
+    SpreadsheetApp.flush();
+  } catch (err) {
+    console.warn('Could not reset the Nominal Roll tab: ' + redactSecrets_(String(err && err.message)));
+  }
+  // Announce in the group outside the lock: it is a network call, and a failure must not undo the session.
   const data = sessionView_(s, s.opensAt.getTime());
   data.startedByMe = true;
   if (result.endedLateOf) data.endedLateOf = result.endedLateOf;
@@ -195,9 +196,9 @@ function isStarter_(session, user) {
 }
 
 function notStarter_(code, session, what) {
-  return reply_(false, code, session.startedByName + ' started this check-in, so only they can ' + what +
-    ' until it closes at ' + hhmm_(session.closesAt) + '.',
-  { startedByName: session.startedByName, closesAtText: hhmm_(session.closesAt) });
+  const until = hasLateWindow_(session) ? 'late check-ins end at ' + hhmm_(session.lateUntil) : 'it closes at ' + hhmm_(session.closesAt);
+  return reply_(false, code, session.startedByName + ' started this check-in, so only they can ' + what + ' until ' + until + '.',
+    { startedByName: session.startedByName, closesAtText: hhmm_(session.closesAt), lateUntilText: hhmm_(session.lateUntil) });
 }
 
 /**

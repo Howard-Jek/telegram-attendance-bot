@@ -47,8 +47,17 @@ function readRoll_() {
   const statusCol = found || lastCol + 1;
   const keys = values.slice(1).map((r) => nameKey_(r[nameCol - 1]));
   const keySet = {};
-  keys.forEach((k) => { if (k) keySet[k] = true; });
-  return { sheet: sheet, statusCol: statusCol, width: Math.max(lastCol, statusCol), keys: keys, keySet: keySet };
+  const twice = {};
+  keys.forEach((k) => {
+    if (!k) return;
+    if (keySet[k]) twice[k] = true;
+    keySet[k] = true;
+  });
+  if (Object.keys(twice).length) {
+    warnOnce_('roll-twice', 'The ' + sheet.getName() + ' tab has the same name on more than one row, so those rows aren\u2019t coloured: ' +
+      Object.keys(twice).slice(0, 5).join('; ') + '.');
+  }
+  return { sheet: sheet, statusCol: statusCol, width: Math.max(lastCol, statusCol), keys: keys, keySet: keySet, twice: twice };
 }
 
 /** Colours the roll and writes its status column for session, from its check-ins (tallyLog_ people). */
@@ -62,12 +71,24 @@ function writeRollColours_(roll, session, people, nowMs) {
     if (!cur || (cur.minutesLate && !p.minutesLate)) best[k] = p;
   });
   const onTimeOver = nowMs >= session.closesAt.getTime();
+  const sheet = roll.sheet;
+  if (sheet.getMaxColumns() < roll.width) sheet.insertColumnsAfter(sheet.getMaxColumns(), roll.width - sheet.getMaxColumns());
+  // Rows with no name (headings, remarks) keep whatever colour the owner gave them.
+  const before = roll.keys.length ? sheet.getRange(2, 1, roll.keys.length, roll.width).getBackgrounds() : [];
   const words = [];
   const colours = [];
-  roll.keys.forEach((k) => {
+  roll.keys.forEach((k, i) => {
     let text = '';
     let colour = null;
-    if (k) {
+    if (!k) {
+      words.push(['']);
+      colours.push(before[i].map((c) => (c === '#ffffff' ? null : c))); // plain white stays "no colour" (keeps banding)
+      return;
+    }
+    if (roll.twice[k]) {
+      // Two people with one name: a check-in can't say which of them it was.
+      text = 'Same name twice on the roll';
+    } else {
       const p = best[k];
       if (p && !p.minutesLate) {
         text = 'On time ' + hhmm_(p.at);
@@ -85,8 +106,6 @@ function writeRollColours_(roll, session, people, nowMs) {
     words.push([text]);
     colours.push(Array(roll.width).fill(colour));
   });
-  const sheet = roll.sheet;
-  if (sheet.getMaxColumns() < roll.width) sheet.insertColumnsAfter(sheet.getMaxColumns(), roll.width - sheet.getMaxColumns());
   sheet.getRange(1, roll.statusCol).setValue(ROLL_STATUS_HEADER_ + ': ' + sessionTabName_(session));
   if (!roll.keys.length) return;
   sheet.getRange(2, roll.statusCol, roll.keys.length, 1).setValues(words);

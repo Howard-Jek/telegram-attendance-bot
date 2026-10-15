@@ -98,7 +98,7 @@
     font-weight: 600;
     text-wrap: pretty;
   }
-  .meta { border-radius: var(--s4); background: var(--surface-ui); } /* a pill on one line, a soft box when a long name wraps */
+  .meta { border-radius: var(--s4); background: var(--surface-ui); white-space: pre-line; } /* a pill on one line, a soft box when a long name wraps */
   .notice {
     display: flex;
     gap: var(--s2);
@@ -421,6 +421,7 @@
   var rankInvalid = false;
   var draftName = null;    // what they typed, kept across re-renders
   var draftRank = null;
+  var rowError = '';        // the server's reason a rank or name was refused (else the app's own)
   var justMoved = false;   // an admin just moved the check-in point (said once on the next screen)
   var justSaved = null;    // {sent, now}: the settings an admin just saved (said once on the next screen)
   var settingsBack = null; // {cancel, saved}: where the settings screen goes next
@@ -440,12 +441,14 @@
   function sessionMeta() {
     var s = status && status.activeSession;
     if (!s) return '';
-    return windowText(s) + (status.isAdmin && s.startedByName ? ' · started by ' + s.startedByName : '');
+    if (!(status.isAdmin && s.startedByName)) return windowText(s);
+    // Once on time is over the window takes a line of its own, so the pill never wraps at a separator.
+    return windowText(s) + (s.late ? '\nStarted by ' : '\u00a0· started by ') + s.startedByName;
   }
 
   // "Open until 11:30", or once on time is over, "On time until 11:30 · late until 12:30".
   function windowText(s) {
-    return s.late ? 'On time until ' + s.closesAtText + ' · late until ' + s.lateUntilText : 'Open until ' + s.closesAtText;
+    return s.late ? 'On time until ' + s.closesAtText + ', late until ' + s.lateUntilText : 'Open until ' + s.closesAtText;
   }
 
   function minutes(n) {
@@ -454,9 +457,13 @@
 
   // During another check-in's late window, any admin may start the next one (which ends that window).
   function withNewStart(actions) {
-    var s = status && status.activeSession;
-    if (!(status && status.isAdmin === true && s && s.late)) return actions;
+    if (!lateWindowAdmin()) return actions;
     return actions.concat([{ label: 'Start a new check-in', onClick: startSession }]);
+  }
+
+  function lateWindowAdmin() {
+    var s = status && status.activeSession;
+    return !!(status && status.isAdmin === true && s && s.late);
   }
 
   function radiusText() {
@@ -541,14 +548,12 @@
       // The distance comes from the start reply: another admin may have changed it since this app loaded.
       if (typeof data.radiusM === 'number') status.radiusM = data.radiusM;
       if (typeof data.maxAccuracyM === 'number') status.maxAccuracyM = data.maxAccuracyM;
-      var late = data.lateUntilText && data.lateUntilText !== data.closesAtText ? ', late until ' + data.lateUntilText : '';
-      var hints = [];
-      if (data.endedLateOf) hints.push('Late check-ins for ' + data.endedLateOf + '’s check-in have ended.');
-      if (pointFromLastKnown) hints.push('Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.');
+      var late = data.lateUntilText && data.lateUntilText !== data.closesAtText ? '\u00a0· late until ' + data.lateUntilText : '';
       return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
-        line: 'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
-        meta: 'Open until ' + data.closesAtText + late + ' · within ' + radiusText(), notice: data.warning, actions: actions,
-        hint: hints.join(' ') };
+        line: (data.endedLateOf ? 'Late check-ins for ' + data.endedLateOf + '’s check-in have ended. ' : '') +
+          'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
+        meta: 'Open until ' + data.closesAtText + late + '\u00a0· within ' + radiusText(), notice: data.warning, actions: actions,
+        hint: pointFromLastKnown ? 'Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.' : '' };
     },
     ready: function (line) {
       var s = status && status.activeSession;
@@ -572,9 +577,10 @@
       var late = lastCheckin && lastCheckin.late;
       var view = { state: asking ? 'profile' : 'checked-in', stamp: atText, stampIsNew: isNew, stampCompact: asking,
         stampLate: late ? 'Late · ' + lastCheckin.minutesLate + ' min' : '',
-        title: late ? 'You’re on the list, marked late' : 'You’re on the list',
+        title: late ? 'You’re on\u00a0the\u00a0list, marked late' : 'You’re on the list',
         line: late ? 'You checked in ' + minutes(lastCheckin.minutesLate) + ' after the on-time check-in closed at ' + closesAtText + '.'
-          : s && s.late ? 'The on-time check-in closed at ' + closesAtText + '. Late check-ins are open until ' + s.lateUntilText + '.'
+          : s && s.late ? (status.isAdmin ? 'You checked in on time. Late check-ins are open until ' + s.lateUntilText + '.'
+            : 'You checked in on time, before ' + closesAtText + '.')
             : 'Check-in closes at ' + closesAtText + '.',
         meta: status && status.isAdmin && s && s.startedByName ? 'Started by ' + s.startedByName : '' };
       if (justMoved) {
@@ -594,13 +600,13 @@
       var p = me.profile;
       var hasGroups = me.groups.length > 0;
       var noName = !p || !p.fullName;
-      var noRank = !noName && !p.rank;
+      var noRank = !noName && rankMissing(p);
       var needGroup = hasGroups && !(p && p.group);
       // Say up front that the check-in is done: the questions are extra, not a condition.
       if (!picking) {
-        view.line = (late ? 'You’re checked in, late. ' : 'You’re checked in. ') + (noName
+        view.line = 'You’re checked in. ' + (noName
           ? (hasGroups ? 'Add your rank and name, then pick your group.' : 'Add your rank and name so admins know who’s who.')
-          : noRank ? 'Rank now has its own box: please check yours' + (needGroup ? ', then pick your group.' : '.')
+          : noRank ? 'Please confirm your rank and full name' + (needGroup ? ', then pick your group.' : '.')
             : 'The group list has changed, so please pick yours again.');
       }
       view.say = noName || noRank
@@ -615,6 +621,7 @@
         view.actions.push({ label: 'Save', primary: true, onClick: function (e) { saveProfile(p.group, e.currentTarget); } });
       }
       if (!profileNeeded()) view.actions.push({ label: 'Cancel', onClick: closePicker });
+      view.actions = withNewStart(view.actions); // an admin may be here for the next check-in, not their name
       return view;
     },
     // kind: 'checkin', 'start' or 'move' when that action failed; '' for loading the page.
@@ -648,6 +655,8 @@
         if (ownsCheckin()) {
           line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, you can move it to where you are.';
           actions.push({ label: 'Move check-in point here', onClick: moveHere });
+        } else if (lateWindowAdmin()) {
+          line = 'You’re ' + metres(d.distanceM) + ' from ' + starterName() + '’s check-in point. To take attendance here, start a new check-in; that ends late check-ins for ' + starterName() + '’s.';
         } else {
           line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, ask ' + starterName() + ', who started this check-in, to move it.';
         }
@@ -680,8 +689,10 @@
       var no = kind === 'checkin' && !unknown; // the ✕ ring mirrors the stamp: check-ins only
       var view = { state: 'failed', icon: no ? 'x' : 'alert', tone: no ? 'no' : 'bad', outcome: outcome, outcomeUnknown: unknown,
         title: title, line: line, meta: sessionMeta(), actions: actions };
-      // Too far or too rough: an admin may decide the distance or accuracy is what's wrong.
+      // Too far or too rough: an admin may decide the distance or accuracy is what's wrong, or (in
+      // someone's late window) be at the next venue already.
       if (res.code === 'OUT_OF_RANGE' || res.code === 'LOW_ACCURACY') view.actions = withSettings(actions, function () { render(view); });
+      if (kind === 'checkin' && ['OUT_OF_RANGE', 'LOW_ACCURACY', 'NO_SITE'].indexOf(res.code) !== -1) view.actions = withNewStart(view.actions);
       return view;
     },
     auth: function (res, kind) {
@@ -797,11 +808,11 @@
     var mins = (status && status.sessionMinutes) || 60;
     var lateMins = (status && status.lateMinutes) || 0;
     var s = status && status.activeSession;
-    var ending = s && s.late ? 'This ends late check-ins for ' + (s.startedByName || 'the current check-in').slice(0, 40) +
-      (s.startedByName ? '’s check-in. ' : '. ') : '';
-    confirmDialog(ending + 'Start a ' + mins + '-minute check-in here? Members will need to be within ' + radiusText() +
-      ' of where you’re standing' + (lateMins ? ', then can check in late for ' + lateMins + ' more minutes' : '') +
-      '. It can’t be ended early.').then(function (ok) {
+    var ending = !(s && s.late) ? ''
+      : s.startedByMe ? 'This ends late check-ins for your current check-in. '
+        : 'This ends late check-ins for ' + (s.startedByName ? s.startedByName.slice(0, 40) + '’s check-in. ' : 'the current check-in. ');
+    confirmDialog(ending + 'Start a ' + mins + '-minute check-in here' + (lateMins ? ', then ' + minutes(lateMins) + ' of late check-ins' : '') +
+      '? Members will need to be within ' + radiusText() + ' of where you’re standing. It can’t be ended early.').then(function (ok) {
       confirming = false;
       if (!ok || working) return;
       startHere();
@@ -820,6 +831,9 @@
         if (res.code === 'SESSION_STARTED' || (res.code === 'SESSION_ACTIVE' && res.data && res.data.startedByMe)) {
           haptic('success');
           status.activeSession = res.data;
+          // Started from the checked-in screen of the check-in this one ended: that one isn't "mine" now.
+          status.myCheckin = null;
+          lastCheckin = null;
           // data.warning explains e.g. that the group announcement could not be sent.
           return render(views.adminStarted(res.data, fix.fallback));
         }
@@ -989,7 +1003,7 @@
             status = d;
             rememberCheckin({ atText: d.myCheckin.atText, closesAtText: d.activeSession.closesAtText, late: d.myCheckin.late,
               minutesLate: d.myCheckin.minutesLate, groups: d.groups, profile: d.profile });
-            haptic('success');
+            haptic(d.myCheckin.late ? 'warning' : 'success');
             return showCheckedIn(true);
           }
           fail(res, checkIn, 'checkin');
@@ -1023,8 +1037,9 @@
     if (!p) return { rank: '', name: '' };
     if (p.rank) return { rank: p.rank, name: p.fullName || '' };
     var words = String(p.fullName || '').trim().split(/\s+/);
-    if (words.length > 1 && RANKS.indexOf(words[0].toLowerCase()) !== -1) {
-      return { rank: words[0].toUpperCase(), name: words.slice(1).join(' ') };
+    var first = words[0].toLowerCase().replace(/[^a-z0-9]/g, ''); // "Cpl." and "CPL," too
+    if (words.length > 1 && RANKS.indexOf(first) !== -1) {
+      return { rank: first.toUpperCase(), name: words.slice(1).join(' ') };
     }
     return { rank: '', name: p.fullName || '' };
   }
@@ -1046,7 +1061,12 @@
   function profileNeeded() {
     if (!me) return false;
     var p = me.profile;
-    return !p || !p.fullName || !p.rank || (me.groups.length > 0 && !p.group);
+    return !p || !p.fullName || rankMissing(p) || (me.groups.length > 0 && !p.group);
+  }
+
+  // A server from before rank had its own box sends no rank at all: then it isn't asked for.
+  function rankMissing(p) {
+    return 'rank' in p && !p.rank;
   }
 
   function closePicker() {
@@ -1086,7 +1106,7 @@
     var p = me.profile;
     var box = el('div', 'picker');
     var split = splitRank(p);
-    if (!p || !p.fullName || !p.rank || picking) {
+    if (!p || !p.fullName || rankMissing(p) || picking) {
       var row = el('div', 'name-row');
       row.appendChild(textField({ id: 'rank', cls: 'field-rank', label: 'Rank', max: 12, caps: 'characters',
         placeholder: 'e.g. CPL', value: draftRank !== null ? draftRank : split.rank, invalid: rankInvalid,
@@ -1097,8 +1117,8 @@
       box.appendChild(row);
       // One line for both boxes, full width (the rank box is too narrow to hold a message).
       if (rankInvalid || nameInvalid) {
-        var err = el('p', 'field-error', rankInvalid && nameInvalid ? 'Enter your rank and full name.'
-          : rankInvalid ? 'Enter your rank.' : 'Enter your full name.');
+        var err = el('p', 'field-error', rowError || (rankInvalid && nameInvalid ? 'Enter your rank and full name.'
+          : rankInvalid ? 'Enter your rank.' : 'Enter your full name.'));
         err.id = 'name-row-error';
         box.appendChild(err);
       }
@@ -1179,6 +1199,7 @@
     if (!rank || !name) {
       rankInvalid = !rank;
       nameInvalid = !name;
+      rowError = '';
       draftRank = rankInput ? rankInput.value : draftRank;
       draftName = nameInput ? nameInput.value : draftName;
       pickerError = '';
@@ -1213,6 +1234,7 @@
         pickerError = '';
         nameInvalid = false;
         rankInvalid = false;
+        rowError = '';
         draftName = null;
         draftRank = null;
         showCheckedIn(false);
@@ -1225,13 +1247,14 @@
       if (res.code === 'INVALID_GROUP' && res.data && Array.isArray(res.data.groups)) me.groups = res.data.groups;
       nameInvalid = res.code === 'INVALID_NAME';
       rankInvalid = res.code === 'INVALID_RANK';
+      rowError = nameInvalid || rankInvalid ? res.message : '';
       // Whatever went wrong, the check-in itself stands; say so.
-      pickerError = res.code === 'NETWORK' || res.code === 'BUSY'
-        ? 'Couldn’t save that. You’re still checked in; tap your group again.'
-        : res.message;
+      pickerError = nameInvalid || rankInvalid ? ''
+        : res.code === 'NETWORK' || res.code === 'BUSY' ? 'Couldn’t save that. You’re still checked in; tap your group again.'
+          : res.message;
       picking = picking || !profileNeeded();
       showCheckedIn(false);
-      statusEl.textContent = pickerError;
+      statusEl.textContent = rowError || pickerError;
       focusFirst(rankInvalid ? '#rank' : nameInvalid ? '#full-name' : '#picker-error');
     });
   }
@@ -1242,7 +1265,7 @@
   var SETTINGS = [
     { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long a check\u2011in stays open', unit: 'minutes' },
     { name: 'lateMinutes', id: 'set-late', min: 0, max: 720, label: 'Then late check\u2011ins are accepted for', unit: 'more minutes',
-      help: 'Marked late. 0 turns late check\u2011ins off.' },
+      help: 'Check-ins in this time are marked late. Enter 0 for none.' },
     { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be to the check\u2011in point', unit: 'm' }, // "check-in" never splits
     { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location must be accurate to within', unit: 'm',
       help: 'A higher number lets more phones through. Raise it if members indoors are told their location isn’t precise enough.' },
@@ -1390,11 +1413,12 @@
     if (sent.maxAccuracyM !== undefined) parts.push('Locations now need to be accurate to within ' + m(now.maxAccuracyM) + '.');
     var s = status.activeSession;
     if (sent.sessionMinutes !== undefined && !onIdle) {
-      parts.push(s ? 'This check-in still closes at ' + s.closesAtText + '; the next one will stay open ' + keep(now.sessionMinutes + ' minutes') + '.'
-        : 'Check-ins now stay open ' + keep(now.sessionMinutes + ' minutes') + '.');
+      var thisOne = s && s.late ? 'This check-in takes late check-ins until ' + s.lateUntilText : 'This check-in still closes at ' + (s && s.closesAtText);
+      parts.push(s ? thisOne + '; the next one will stay open ' + keep(minutes(now.sessionMinutes)) + '.'
+        : 'Check-ins now stay open ' + keep(minutes(now.sessionMinutes)) + '.');
     }
     if (sent.lateMinutes !== undefined && !onIdle) {
-      var lateNow = now.lateMinutes ? 'accept late check-ins for ' + keep(now.lateMinutes + ' minutes') : 'take no late check-ins';
+      var lateNow = now.lateMinutes ? 'accept late check-ins for ' + keep(minutes(now.lateMinutes)) : 'take no late check-ins';
       parts.push(s ? 'The next check-in will ' + lateNow + '.' : 'Check-ins now ' + lateNow + '.');
     }
     return parts.length ? 'Saved. ' + parts.join(' ') : 'Saved.';
