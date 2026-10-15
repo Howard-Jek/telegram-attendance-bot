@@ -16,10 +16,12 @@ const tab = (env, name = TAB) => env.sheet(name);
 const tabRows = (env, name = TAB) => {
   const sheet = tab(env, name);
   const out = [];
-  for (let r = 1; r <= sheet.getLastRow(); r++) out.push(sheet.getRange(r, 1, 1, 5).getValues()[0]);
+  for (let r = 1; r <= sheet.getLastRow(); r++) out.push(sheet.getRange(r, 1, 1, 8).getValues()[0]);
   return out;
 };
-const people = (env, name = TAB) => tabRows(env, name).slice(5).map((r) => [r[0], r[1]]);
+// [group, full name] per person; the columns are Group, Rank, Full name, Checked in at, Late by,
+// Telegram name, Username, On nominal roll.
+const people = (env, name = TAB) => tabRows(env, name).slice(5).map((r) => [r[0], r[2]]);
 
 /** Every value in every tab, for searching. */
 function everything(env) {
@@ -159,8 +161,8 @@ test('migration: setup() deletes the old coordinates, keeps everything else, and
   const env = septemberSheet();
   env.call('setupSheets');
   assert.deepEqual(env.sheet('Sessions').getRange(1, 1, 1, 9).getValues()[0], SEPT.Sessions.slice(0, 8).concat(['site_accuracy_m']));
-  assert.equal(env.sheet('Sessions').getLastColumn(), 9);
-  assert.equal(env.sheet('Log').getLastColumn(), 11);
+  assert.equal(env.sheet('Sessions').getLastColumn(), 10, 'site_accuracy_m, then late_until');
+  assert.equal(env.sheet('Log').getLastColumn(), 13, '… group, then rank and minutes_late');
   assert.equal(env.sheet('Rejected').getLastColumn(), 8);
   assertNoCoordinates(env, [SITE_FIX, ONSITE, OFFSITE, { lat: 1.1111, lng: 103.1111 }, { lat: 1.1112, lng: 103.1112 }]);
   // Nothing else moved out of place.
@@ -256,9 +258,9 @@ test('session tab: starting a check-in adds its tab, named by its start time, as
   assert.match(rows[0][0], /21 Sep 2026, 10:30 to 11:30 · started by Ada Admin/);
   assert.equal(rows[1][0], 'Nobody has checked in yet.');
   assert.match(rows[2][0], /Updates every 5 minutes until the check-in closes at 11:30/);
-  assert.deepEqual(rows[4], ['Group', 'Rank and full name', 'Checked in at', 'Telegram name', 'Username']);
+  assert.deepEqual(rows[4], ['Group', 'Rank', 'Full name', 'Checked in at', 'Late by', 'Telegram name', 'Username', 'On nominal roll']);
   assert.equal(sheet.getFrozenRows(), 5);
-  assert.ok(sheet.getMaxColumns() <= 5 && sheet.getMaxRows() <= 10, 'kept small: a Sheet holds at most 10 million cells');
+  assert.ok(sheet.getMaxColumns() <= 8 && sheet.getMaxRows() <= 10, 'kept small: a Sheet holds at most 10 million cells');
 });
 
 test('session tab: lists who checked in, by group in the Groups tab\'s order, refreshed by the close job and final at close', () => {
@@ -278,10 +280,10 @@ test('session tab: lists who checked in, by group in the Groups tab\'s order, re
   const rows = tabRows(env);
   assert.equal(rows[1][0], '3 checked in · Bravo 1 · Alpha 1 · No group 1');
   assert.deepEqual(people(env), [['Bravo', 'LCP Di Ong'], ['Alpha', 'CPL Cy Tan'], ['', '']]);
-  assert.deepEqual(rows[5].slice(3), ['Di', '']);
-  assert.deepEqual(rows[6].slice(3), ['Cy Member', '@cy']);
-  assert.deepEqual(rows[7].slice(3), ['Ada Admin', '@ada']);
-  assert.equal(rows[6][2].getTime(), T0 + MIN, 'the check-in time, as a time');
+  assert.deepEqual(rows[5].slice(5, 7), ['Di', '']);
+  assert.deepEqual(rows[6].slice(5, 7), ['Cy Member', '@cy']);
+  assert.deepEqual(rows[7].slice(5, 7), ['Ada Admin', '@ada']);
+  assert.equal(rows[6][3].getTime(), T0 + MIN, 'the check-in time, as a time');
 
   env.setNow(T0 + 60 * MIN);
   close(env);
@@ -309,8 +311,8 @@ test('session tab: names are written as text, never as formulas', () => {
   close(env);
   assert.deepEqual(env.formulaWrites, []);
   const row = tabRows(env)[5];
-  assert.deepEqual(row.slice(0, 2), ['+Alpha', "'+65 Tan"]);
-  assert.match(row[3], /^'=HYPERLINK/);
+  assert.deepEqual([row[0], row[2]], ['+Alpha', "'+65 Tan"]);
+  assert.match(row[5], /^'=HYPERLINK/);
 });
 
 test('session tab: one per check-in, newest first; each lists only its own people', () => {
@@ -326,8 +328,8 @@ test('session tab: one per check-in, newest first; each lists only its own peopl
   const names = env.ss.getSheets().map((s) => s.getName());
   assert.deepEqual(names.slice(0, 2), ['21 Sep 2026 1230', TAB]);
   assert.deepEqual(people(env, '21 Sep 2026 1230'), [['', '']]);
-  assert.equal(tabRows(env, '21 Sep 2026 1230')[5][3], 'Di');
-  assert.equal(tabRows(env)[5][3], 'Cy Member');
+  assert.equal(tabRows(env, '21 Sep 2026 1230')[5][5], 'Di');
+  assert.equal(tabRows(env)[5][5], 'Cy Member');
 });
 
 test('session tab: renamed by the owner, it is still the one kept up to date (no duplicate)', () => {

@@ -1,9 +1,9 @@
 /**
- * Check-in settings an admin can change in the Mini App: how long a check-in stays open, how close
- * members must be, and how precise their location must be. They are the Config tab's
- * SESSION_MINUTES, RADIUS_M and MAX_ACCURACY_M, so the owner can still edit them there too.
- * The distance and accuracy apply at once, including to a check-in that is open; the time applies
- * to the next check-in started. While a check-in is open, only the admin who started it may change
+ * Check-in settings an admin can change in the Mini App: how long a check-in stays open, how long
+ * late check-ins are accepted after that, how close members must be, and how precise their
+ * location must be. They are the Config tab's SESSION_MINUTES, LATE_MINUTES, RADIUS_M and
+ * MAX_ACCURACY_M, so the owner can still edit them there too. The distance and accuracy apply at
+ * once, including to a check-in that is open; the two times apply to the next check-in started. While a check-in is open, only the admin who started it may change
  * them (isStarter_ in Sessions.gs).
  */
 
@@ -12,6 +12,7 @@ const SETTINGS_ = {
   sessionMinutes: { key: 'SESSION_MINUTES', min: 1, max: 720 },
   radiusM: { key: 'RADIUS_M', min: 10, max: 5000 },
   maxAccuracyM: { key: 'MAX_ACCURACY_M', min: 10, max: 500 },
+  lateMinutes: { key: 'LATE_MINUTES', min: 0, max: 720 },
 };
 
 function handleSaveSettings_(ctx, body) {
@@ -51,7 +52,7 @@ function handleSaveSettings_(ctx, body) {
     const now = now_().getTime();
     const sessions = readSessions_();
     cacheSessions_(sessions, now);
-    const open = findBlockingSession_(sessions, now);
+    const open = findActiveSession_(sessions, now); // its late window included
     if (open && !isStarter_(open, ctx.user)) return notStarter_('SETTINGS_LOCKED', open, 'change the settings');
     setConfigValues_(values);
     if (seen) cache.put(seen, '1', 3600);
@@ -64,5 +65,5 @@ function handleSaveSettings_(ctx, body) {
 }
 
 function settingsView_(cfg) {
-  return { sessionMinutes: cfg.sessionMinutes, radiusM: cfg.radiusM, maxAccuracyM: cfg.maxAccuracyM };
+  return { sessionMinutes: cfg.sessionMinutes, radiusM: cfg.radiusM, maxAccuracyM: cfg.maxAccuracyM, lateMinutes: cfg.lateMinutes };
 }

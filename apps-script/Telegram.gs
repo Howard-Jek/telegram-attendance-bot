@@ -128,9 +128,9 @@ function deleteMessage_(token, chatId, messageId) {
   return tgCall_(token, 'deleteMessage', { chat_id: chatId, message_id: messageId });
 }
 
-/** Replaces a message's text. Without reply_markup, Telegram also removes its buttons. */
-function editText_(token, chatId, messageId, text) {
-  return tgCall_(token, 'editMessageText', {
-    chat_id: chatId, message_id: messageId, text: text, link_preview_options: { is_disabled: true },
-  });
+/** Replaces a message's text. Without replyMarkup, Telegram also removes its buttons. */
+function editText_(token, chatId, messageId, text, replyMarkup) {
+  const params = { chat_id: chatId, message_id: messageId, text: text, link_preview_options: { is_disabled: true } };
+  if (replyMarkup) params.reply_markup = replyMarkup;
+  return tgCall_(token, 'editMessageText', params);
 }

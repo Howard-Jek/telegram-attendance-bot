@@ -1,11 +1,12 @@
 /**
  * Groups and names. The owner lists the groups on the Groups tab; each member picks theirs
- * and gives their rank and full name once in the Mini App (kept in the full_name column). Both
- * are kept on the Members tab (where an admin can correct them) and copied onto every Log row,
- * so the Log reads by real name and group.
+ * and gives their rank and full name once in the Mini App. They are kept on the Members tab
+ * (where an admin can correct them) and copied onto every Log row, so the Log reads by real name,
+ * rank and group, and the full name can be matched against the Nominal Roll.
  */
 
 const MAX_NAME_CHARS_ = 60;
+const MAX_RANK_CHARS_ = 12;
 const MAX_GROUP_CHARS_ = 100;
 const MAX_GROUPS_ = 50;
 
@@ -17,7 +18,7 @@ function profileData_(userId) {
   const groups = readGroups_();
   const saved = savedProfile_(userId);
   const profile = saved
-    ? { fullName: saved.fullName, group: groups.indexOf(saved.group) === -1 ? '' : saved.group }
+    ? { rank: saved.rank || '', fullName: saved.fullName, group: groups.indexOf(saved.group) === -1 ? '' : saved.group }
     : null;
   return { groups: groups, profile: profile };
 }
@@ -33,7 +34,16 @@ function handleSaveProfile_(ctx, body) {
 
   const fullName = cleanText_(body.fullName, MAX_NAME_CHARS_);
   if (!fullName) {
-    return reply_(false, 'INVALID_NAME', 'Please enter your rank and full name (up to ' + MAX_NAME_CHARS_ + ' characters).');
+    return reply_(false, 'INVALID_NAME', 'Please enter your full name (up to ' + MAX_NAME_CHARS_ + ' characters).');
+  }
+  // An app from before rank had its own field sends none: keep the saved one.
+  let rank;
+  if (body.rank === undefined) {
+    const saved = savedProfile_(user.id);
+    rank = saved && saved.rank ? saved.rank : '';
+  } else {
+    rank = cleanText_(body.rank, MAX_RANK_CHARS_).toUpperCase();
+    if (!rank) return reply_(false, 'INVALID_RANK', 'Please enter your rank (up to ' + MAX_RANK_CHARS_ + ' characters).');
   }
   const groups = readGroups_();
   let group = cleanText_(body.group, MAX_GROUP_CHARS_);
@@ -44,15 +54,16 @@ function handleSaveProfile_(ctx, body) {
 
   const result = withProfileLock_(() => {
     const now = now_();
-    upsertMember_(user, fullName, group, now);
+    upsertMember_(user, rank, fullName, group, now);
     // Already checked in to the open session? That Log row gets the new details too. Check-ins only
     // ever append rows, so updating an existing row doesn't need the check-in lock.
     const session = findActiveSession_(sessionsForRead_(), now.getTime());
     const mine = session ? findCheckin_(dedupeKey_(session.id, user.id)) : null;
     if (mine) {
-      sheet_(SHEETS_.LOG).getRange(mine.row, LOG_COL_.FULL_NAME, 1, 2).setValues([[textCell_(fullName), groupCell_(group)]]);
+      sheet_(SHEETS_.LOG).getRange(mine.row, LOG_COL_.FULL_NAME, 1, 3)
+        .setValues([[textCell_(fullName), groupCell_(group), textCell_(rank)]]);
     }
-    return reply_(true, 'PROFILE_SAVED', 'Saved.', { groups: groups, profile: { fullName: fullName, group: group } });
+    return reply_(true, 'PROFILE_SAVED', 'Saved.', { groups: groups, profile: { rank: rank, fullName: fullName, group: group } });
   });
   return result || reply_(false, 'BUSY', MESSAGES_.BUSY);
 }
@@ -80,13 +91,13 @@ function readGroups_() {
   return out;
 }
 
-/** {fullName, group} as saved on the Members tab (from a copy up to 10 minutes old), or null. */
+/** {rank, fullName, group} as saved on the Members tab (from a copy up to 10 minutes old), or null. */
 function savedProfile_(userId) {
   const key = 'member:' + userId;
   const copy = cacheGetJson_(key);
-  if (copy && typeof copy === 'object') return copy.none ? null : copy;
+  if (copy && typeof copy === 'object') return copy.none ? null : Object.assign({ rank: '' }, copy);
   const found = findMember_(userId);
-  const profile = found ? { fullName: found.fullName, group: found.group } : null;
+  const profile = found ? { rank: found.rank, fullName: found.fullName, group: found.group } : null;
   cachePutJson_(key, profile || { none: true }, CACHE_SEC_.MEMBER);
   return profile;
 }
@@ -102,6 +113,7 @@ function findMember_(userId) {
         row: i + 1,
         fullName: String(values[i][MEMBER_COL_.FULL_NAME - 1]).trim(),
         group: String(values[i][MEMBER_COL_.GROUP - 1]).trim(),
+        rank: String(values[i][MEMBER_COL_.RANK - 1]).trim(),
       };
     }
   }
@@ -109,9 +121,9 @@ function findMember_(userId) {
 }
 
 /** Call with the profile lock held (withProfileLock_). */
-function upsertMember_(user, fullName, group, now) {
+function upsertMember_(user, rank, fullName, group, now) {
   const sheet = sheet_(SHEETS_.MEMBERS);
-  const fields = [textCell_(fullName), groupCell_(group), textCell_(user.name), textCell_(user.username), now];
+  const fields = [textCell_(fullName), groupCell_(group), textCell_(user.name), textCell_(user.username), now, textCell_(rank)];
   const found = findMember_(user.id);
   if (found) {
     sheet.getRange(found.row, MEMBER_COL_.FULL_NAME, 1, fields.length).setValues([fields]);
@@ -119,7 +131,7 @@ function upsertMember_(user, fullName, group, now) {
     sheet.appendRow(["'" + user.id].concat(fields)); // text, so the id is found whatever the column format
   }
   SpreadsheetApp.flush(); // copy only what is really saved
-  cachePutJson_('member:' + user.id, { fullName: fullName, group: group }, CACHE_SEC_.MEMBER);
+  cachePutJson_('member:' + user.id, { rank: rank, fullName: fullName, group: group }, CACHE_SEC_.MEMBER);
 }
 
 /**

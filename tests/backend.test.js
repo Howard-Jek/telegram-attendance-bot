@@ -85,7 +85,7 @@ test('AT1: admin starts a session -> one Sessions row with server-time window', 
   assert.equal(res.data.closesAtText, '11:30');
   const rows = env.rows('Sessions');
   assert.equal(rows.length, 1);
-  const [id, byId, byName, opens, closes, msgId, status, count, acc] = rows[0];
+  const [id, byId, byName, opens, closes, msgId, status, count, acc, lateUntil] = rows[0];
   assert.equal(id, 'S-20260921-1030');
   assert.equal(byId, ADMIN.id);
   assert.equal(byName, 'Ada Admin');
@@ -94,7 +94,8 @@ test('AT1: admin starts a session -> one Sessions row with server-time window', 
   assert.equal(closes.getTime() - opens.getTime(), 60 * MIN);
   assert.deepEqual([status, count], ['open', 0]);
   assert.equal(acc, SITE_FIX.accuracy);
-  assert.equal(rows[0].length, 9, 'no coordinates in the Sheet');
+  assert.equal(rows[0].length, 10, 'no coordinates in the Sheet');
+  assert.equal(lateUntil.getTime(), closes.getTime(), 'LATE_MINUTES 0 here: no late window');
   assert.deepEqual(env.siteOf(id), { lat: SITE_FIX.lat, lng: SITE_FIX.lng }, 'centred on the admin, kept out of the Sheet');
   assert.equal(msgId, env.visible()[0].messageId, 'the group announcement is recorded');
   assert.equal(env.rows('Log').length, 0, 'admins are not auto-checked in');
@@ -436,7 +437,7 @@ test('setupSheets is idempotent and never overwrites filled-in Config', () => {
   assert.equal(env.ss.getSpreadsheetTimeZone(), 'Asia/Singapore');
   const cfg = env.sheet('Config').rows();
   assert.deepEqual(cfg.map((r) => r[0]),
-    ['GROUP_CHAT_ID', 'MINI_APP_LINK', 'RADIUS_M', 'MAX_ACCURACY_M', 'SESSION_MINUTES', 'INITDATA_MAX_AGE_MIN', 'ADMIN_IDS']);
+    ['GROUP_CHAT_ID', 'MINI_APP_LINK', 'RADIUS_M', 'MAX_ACCURACY_M', 'SESSION_MINUTES', 'LATE_MINUTES', 'INITDATA_MAX_AGE_MIN', 'ADMIN_IDS']);
   assert.deepEqual(cfg.find((r) => r[0] === 'ADMIN_IDS'), ['ADMIN_IDS', '']);
   assert.deepEqual(cfg.find((r) => r[0] === 'GROUP_CHAT_ID'), ['GROUP_CHAT_ID', '-1001234567890'], 'kept as text');
   assert.equal(env.rows('Sessions').length, 1);

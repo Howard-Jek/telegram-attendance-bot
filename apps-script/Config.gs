@@ -23,21 +23,22 @@ const SHEETS_ = {
 // point and the GPS accuracy, and the point itself lives in Script Properties (Sessions.gs).
 const HEADERS_ = {
   Config: ['key', 'value'],
+  // closes_at ends the on-time window; late_until ends the late one (closes_at if there is none).
   Sessions: ['session_id', 'started_by_id', 'started_by_name', 'opens_at', 'closes_at',
-    'announcement_message_id', 'status', 'checkin_count', 'site_accuracy_m'],
+    'announcement_message_id', 'status', 'checkin_count', 'site_accuracy_m', 'late_until'],
   Log: ['timestamp', 'session_id', 'user_id', 'first_name', 'last_name', 'username',
-    'accuracy_m', 'distance_m', 'dedupe_key', 'full_name', 'group'],
+    'accuracy_m', 'distance_m', 'dedupe_key', 'full_name', 'group', 'rank', 'minutes_late'],
   Rejected: ['timestamp', 'session_id', 'user_id', 'name', 'username', 'reason',
     'accuracy_m', 'distance_m'],
   Groups: ['group'],
-  Members: ['user_id', 'full_name', 'group', 'telegram_name', 'username', 'updated_at'],
+  Members: ['user_id', 'full_name', 'group', 'telegram_name', 'username', 'updated_at', 'rank'],
 };
 
 // 1-based column numbers.
 const SESSION_COL_ = { ID: 1, STARTED_BY_ID: 2, STARTED_BY_NAME: 3, OPENS_AT: 4, CLOSES_AT: 5,
-  MESSAGE_ID: 6, STATUS: 7, COUNT: 8, SITE_ACCURACY: 9 };
+  MESSAGE_ID: 6, STATUS: 7, COUNT: 8, SITE_ACCURACY: 9, LATE_UNTIL: 10 };
 const LOG_COL_ = { TIMESTAMP: 1, SESSION_ID: 2, USER_ID: 3, FIRST_NAME: 4, LAST_NAME: 5, USERNAME: 6,
-  ACCURACY: 7, DISTANCE: 8, DEDUPE_KEY: 9, FULL_NAME: 10, GROUP: 11 };
+  ACCURACY: 7, DISTANCE: 8, DEDUPE_KEY: 9, FULL_NAME: 10, GROUP: 11, RANK: 12, MINUTES_LATE: 13 };
 
 // Tabs as versions before October 2026 laid them out, with coordinate columns. setup() removes
 // them (removeStoredLocations_ in Setup.gs); until then requests ask for setup() to be run.
@@ -46,7 +47,7 @@ const LEGACY_LOCATION_COLUMNS_ = {
   Log: { col: 7, headers: ['latitude', 'longitude'] },
   Rejected: { col: 7, headers: ['latitude', 'longitude'] },
 };
-const MEMBER_COL_ = { USER_ID: 1, FULL_NAME: 2, GROUP: 3, TELEGRAM_NAME: 4, USERNAME: 5, UPDATED_AT: 6 };
+const MEMBER_COL_ = { USER_ID: 1, FULL_NAME: 2, GROUP: 3, TELEGRAM_NAME: 4, USERNAME: 5, UPDATED_AT: 6, RANK: 7 };
 
 // Blank means "not set". GROUP_CHAT_ID is filled in by the bot when it is added to a group.
 const CONFIG_DEFAULTS_ = {
@@ -55,6 +56,7 @@ const CONFIG_DEFAULTS_ = {
   RADIUS_M: 150,
   MAX_ACCURACY_M: 100,
   SESSION_MINUTES: 60,
+  LATE_MINUTES: 60, // after the on-time window, check-ins are accepted this long more, marked late
   INITDATA_MAX_AGE_MIN: 15,
   ADMIN_IDS: '', // optional: people who may start check-ins without being Telegram group admins
 };
@@ -63,6 +65,7 @@ const CONFIG_CHECKS_ = {
   RADIUS_M: (c) => c.radiusM > 0,
   MAX_ACCURACY_M: (c) => c.maxAccuracyM > 0,
   SESSION_MINUTES: (c) => c.sessionMinutes >= 1, // >= 1 keeps S-yyyyMMdd-HHmm ids unique
+  LATE_MINUTES: (c) => c.lateMinutes >= 0,
   INITDATA_MAX_AGE_MIN: (c) => c.initDataMaxAgeMin > 0,
   GROUP_CHAT_ID: (c) => /^-\d+$/.test(c.groupChatId),
   ADMIN_IDS: (c) => c.adminIds.every((id) => /^\d+$/.test(id)),
@@ -89,6 +92,7 @@ function loadConfig_(fresh) {
     radiusM: toNumber_(val('RADIUS_M')),
     maxAccuracyM: toNumber_(val('MAX_ACCURACY_M')),
     sessionMinutes: toNumber_(val('SESSION_MINUTES')),
+    lateMinutes: toNumber_(val('LATE_MINUTES')),
     initDataMaxAgeMin: toNumber_(val('INITDATA_MAX_AGE_MIN')),
     adminIds: String(val('ADMIN_IDS')).split(',').map((s) => s.trim()).filter(Boolean),
     groupChatId: String(val('GROUP_CHAT_ID')).trim(),

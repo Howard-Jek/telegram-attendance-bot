@@ -8,7 +8,8 @@
  */
 
 const SESSION_TAB_KEY_ = 'checkinSessionId';
-const SESSION_TAB_COLUMNS_ = ['Group', 'Rank and full name', 'Checked in at', 'Telegram name', 'Username'];
+const SESSION_TAB_COLUMNS_ = ['Group', 'Rank', 'Full name', 'Checked in at', 'Late by', 'Telegram name', 'Username',
+  'On nominal roll'];
 const SESSION_TAB_HEAD_ROWS_ = 5; // title, count, status, blank, column names
 const TAB_PENDING_PREFIX_ = 'TAB_PENDING:';
 const TAB_PENDING_GIVE_UP_MS_ = 24 * 60 * 60 * 1000;
@@ -27,7 +28,7 @@ function pendingFinalTabs_(sessions, closingNow, nowMs) {
   props.getKeys().forEach((k) => {
     if (k.indexOf(TAB_PENDING_PREFIX_) !== 0) return;
     const s = byId[k.slice(TAB_PENDING_PREFIX_.length)];
-    if (s && nowMs - s.closesAt.getTime() <= TAB_PENDING_GIVE_UP_MS_) {
+    if (s && nowMs - s.lateUntil.getTime() <= TAB_PENDING_GIVE_UP_MS_) {
       out.push(s);
       return;
     }
@@ -74,15 +75,17 @@ function ensureSessionTab_(session) {
   sheet.setFrozenRows(SESSION_TAB_HEAD_ROWS_);
   sheet.getRange(1, 1).setFontWeight('bold');
   sheet.getRange(SESSION_TAB_HEAD_ROWS_, 1, 1, SESSION_TAB_COLUMNS_.length).setFontWeight('bold');
-  sheet.setColumnWidths(1, SESSION_TAB_COLUMNS_.length, 170);
+  sheet.setColumnWidths(1, SESSION_TAB_COLUMNS_.length, 130);
+  sheet.setColumnWidth(3, 200);
   return sheet;
 }
 
 /**
- * Rewrites the whole tab. people: rows from tallyLog_ ({at, userId, fullName, group, firstName,
- * lastName, username}); final: the check-in has closed. Text from members is written as text.
+ * Rewrites the whole tab. people: rows from tallyLog_ ({at, userId, rank, fullName, group, minutesLate,
+ * firstName, lastName, username}); final: the check-in has closed; roll: readRoll_()'s answer, or
+ * null when there is no Nominal Roll. Text from members is written as text.
  */
-function writeSessionTab_(sheet, session, people, groupOrder, final) {
+function writeSessionTab_(sheet, session, people, groupOrder, final, roll) {
   const seen = {};
   const unique = people.filter((p) => (seen[p.userId] ? false : (seen[p.userId] = true)));
   const counts = {};
@@ -91,32 +94,49 @@ function writeSessionTab_(sheet, session, people, groupOrder, final) {
   const rank = (g) => (g === '' ? order.length : order.indexOf(g));
   unique.sort((a, b) => rank(a.group) - rank(b.group) || a.at.getTime() - b.at.getTime());
 
+  const lateWindow = hasLateWindow_(session);
+  const closes = hhmm_(session.closesAt);
+  const lateUntil = hhmm_(session.lateUntil);
+  const late = unique.filter((p) => p.minutesLate).length;
   const breakdown = groupBreakdown_(counts, groupOrder);
-  const count = unique.length;
-  const summary = count
-    ? count + ' checked in' + (breakdown.length ? ' · ' + breakdown.join(' · ') : '')
+  const summary = unique.length
+    ? unique.length + ' checked in' + (late ? ' (' + late + ' late)' : '') + (breakdown.length ? ' · ' + breakdown.join(' · ') : '')
     : (final ? 'Nobody checked in.' : 'Nobody has checked in yet.');
-  const status = final
-    ? 'Final list: the check-in closed at ' + hhmm_(session.closesAt) + '.'
-    : 'Updates every 5 minutes until the check-in closes at ' + hhmm_(session.closesAt) + '.';
+  let status;
+  if (final) {
+    status = lateWindow ? 'Final list: on time until ' + closes + ', late until ' + lateUntil + '.'
+      : 'Final list: the check-in closed at ' + closes + '.';
+  } else if (!lateWindow) {
+    status = 'Updates every 5 minutes until the check-in closes at ' + closes + '.';
+  } else if (now_().getTime() < session.closesAt.getTime()) {
+    status = 'On time until ' + closes + ', then late until ' + lateUntil + '. Updates every 5 minutes.';
+  } else {
+    status = 'On-time check-in closed at ' + closes + '; late check-ins until ' + lateUntil + '. Updates every 5 minutes.';
+  }
   const title = 'Check-in on ' + Utilities.formatDate(session.opensAt, TZ_, 'd MMM yyyy') + ', ' +
-    hhmm_(session.opensAt) + ' to ' + hhmm_(session.closesAt) + ' · started by ' + session.startedByName;
-  const line = (text) => [text, '', '', '', ''];
+    hhmm_(session.opensAt) + ' to ' + closes + (lateWindow ? ', late until ' + lateUntil : '') +
+    ' · started by ' + session.startedByName;
+  const width = SESSION_TAB_COLUMNS_.length;
+  const line = (text) => [text].concat(Array(width - 1).fill(''));
   const block = [line(title), line(summary), line(status), line(''), SESSION_TAB_COLUMNS_.slice()]
     .concat(unique.map((p) => [
       groupCell_(p.group),
+      textCell_(p.rank),
       textCell_(p.fullName),
       p.at,
+      p.minutesLate ? p.minutesLate + ' min' : '',
       textCell_([p.firstName, p.lastName].filter(Boolean).join(' ')),
       // Telegram usernames are letters, digits and _ only, so "@name" can't be read as a formula.
       /^\w+$/.test(p.username) ? "'@" + p.username : textCell_(p.username),
+      roll ? (roll.keySet[nameKey_(p.fullName)] ? 'Yes' : 'No') : '',
     ]));
 
   // Exactly as many rows as needed, plus one (Sheets keeps at least one row below the frozen ones).
   const rows = block.length + 1;
   if (sheet.getMaxRows() < rows) sheet.insertRowsAfter(sheet.getMaxRows(), rows - sheet.getMaxRows());
   if (sheet.getMaxRows() > rows) sheet.deleteRows(rows + 1, sheet.getMaxRows() - rows);
+  if (sheet.getMaxColumns() < width) sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
   sheet.clearContents();
-  sheet.getRange(1, 1, block.length, SESSION_TAB_COLUMNS_.length).setValues(block);
-  if (unique.length) sheet.getRange(SESSION_TAB_HEAD_ROWS_ + 1, 3, unique.length, 1).setNumberFormat('HH:mm');
+  sheet.getRange(1, 1, block.length, width).setValues(block);
+  if (unique.length) sheet.getRange(SESSION_TAB_HEAD_ROWS_ + 1, 4, unique.length, 1).setNumberFormat('HH:mm');
 }

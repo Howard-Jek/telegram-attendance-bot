@@ -62,10 +62,11 @@ function describeSendError_(res) {
 }
 
 /**
- * Time-driven trigger (every 5 minutes, installed by setup()). Keeps checkin_count and each open
- * session's tab current (check-ins write neither), marks ended sessions closed with the final
- * count and list, deletes the check-in points of sessions that can't take check-ins any more,
- * and turns the live message into the result, broken down by group.
+ * Time-driven trigger (every 5 minutes, installed by setup()). Keeps checkin_count, each open
+ * session's tab and the Nominal Roll current (check-ins write none of them). When a session's
+ * on-time window ends it is marked late and the live message says so (keeping its button); when
+ * its late window ends it is marked closed with the final count and list, its check-in point is
+ * deleted, and the live message becomes the result, broken down by group.
  */
 function closeExpiredSessions() {
   openedSpreadsheet_ = null;
@@ -79,15 +80,17 @@ function closeExpiredSessions() {
 function closeExpiredSessions_() {
   const cfg = loadConfig_();
   const now = now_();
+  const nowMs = now.getTime();
   const done = withScriptLock_(() => {
     const sessions = readSessions_();
-    cacheSessions_(sessions, now.getTime()); // every run refreshes the copy, picking up hand edits
-    pruneSites_(sessions, now.getTime());
-    const open = sessions.filter((s) => s.status === 'open');
-    const due = open.filter((s) => s.closesAt.getTime() <= now.getTime());
-    const finals = pendingFinalTabs_(sessions, due, now.getTime()); // includes the due ones
-    const live = open.filter((s) => due.indexOf(s) === -1);
-    if (!live.length && !finals.length) return { closed: [], tabs: [] };
+    cacheSessions_(sessions, nowMs); // every run refreshes the copy, picking up hand edits
+    pruneSites_(sessions, nowMs);
+    const running = sessions.filter((s) => s.status === 'open' || s.status === 'late');
+    const ending = running.filter((s) => s.lateUntil.getTime() <= nowMs); // late window over (or ended early)
+    const turningLate = running.filter((s) => s.status === 'open' && s.closesAt.getTime() <= nowMs && ending.indexOf(s) === -1);
+    const finals = pendingFinalTabs_(sessions, ending, nowMs); // includes the ending ones
+    const live = running.filter((s) => ending.indexOf(s) === -1);
+    if (!live.length && !finals.length) return { tabs: [] };
     const tally = tallyLog_(live.concat(finals).map((s) => s.id));
     // Each tab, made here if it's missing (under the lock, so only once); filled in below, after
     // the lock is released, so check-ins don't wait on it.
@@ -100,26 +103,47 @@ function closeExpiredSessions_() {
         console.warn('Could not find or make the session tab for ' + s.id + ': ' + redactSecrets_(String(err && err.message)));
       }
     });
-    if (!open.length) return { closed: [], tabs: tabs };
     const sheet = sheet_(SHEETS_.SESSIONS);
-    open.forEach((s) => {
-      s.tally = tally[s.id];
-      if (due.indexOf(s) !== -1) {
+    running.forEach((s) => {
+      if (ending.indexOf(s) !== -1) {
         sheet.getRange(s.row, SESSION_COL_.STATUS, 1, 2).setValues([['closed', s.tally.count]]);
+      } else if (turningLate.indexOf(s) !== -1) {
+        sheet.getRange(s.row, SESSION_COL_.STATUS, 1, 2).setValues([['late', s.tally.count]]);
       } else if (s.count !== s.tally.count) {
         sheet.getRange(s.row, SESSION_COL_.COUNT).setValue(s.tally.count);
       }
     });
-    if (!due.length) return { closed: [], tabs: tabs };
     // Only a session that just ended is announced; a backlog (e.g. the job was off) closes quietly.
-    const recent = latest_(due.filter((s) => now.getTime() - s.closesAt.getTime() < ANNOUNCE_WINDOW_MS_));
-    return { closed: due, recent: recent, live: recent ? takeLiveMessage_(recent.id) : null, tabs: tabs };
+    const recent = latest_(ending.filter((s) => nowMs - s.lateUntil.getTime() < ANNOUNCE_WINDOW_MS_));
+    const nowLate = latest_(turningLate);
+    const liveMessage = readLiveMessage_();
+    const newest = latestStarted_(sessions);
+    return {
+      tabs: tabs,
+      recent: recent,
+      live: recent ? takeLiveMessage_(recent.id) : null,
+      nowLate: nowLate,
+      lateMessage: nowLate && liveMessage && liveMessage.sessionId === nowLate.id ? liveMessage : null,
+      // The Nominal Roll follows the newest session, while its tab is still being written.
+      rollSession: newest && tabs.some((t) => t.session === newest) ? newest : null,
+    };
   });
   if (!done) return; // lock busy: the next run picks it up
+
   if (done.tabs.length) {
+    let roll = null;
+    try {
+      roll = readRoll_();
+      if (roll && done.rollSession) {
+        writeRollColours_(roll, done.rollSession, done.rollSession.tally.people, nowMs);
+        SpreadsheetApp.flush();
+      }
+    } catch (err) {
+      console.warn('Could not update the Nominal Roll tab: ' + redactSecrets_(String(err && err.message)));
+    }
     done.tabs.forEach((t) => {
       try {
-        writeSessionTab_(t.sheet, t.session, t.session.tally.people, readGroups_(), t.final);
+        writeSessionTab_(t.sheet, t.session, t.session.tally.people, readGroups_(), t.final, roll);
         SpreadsheetApp.flush(); // Sheets applies writes later; any error surfaces here, inside the try
         if (t.final) finalTabWritten_(t.session.id);
       } catch (err) {
@@ -127,7 +151,14 @@ function closeExpiredSessions_() {
       }
     });
   }
-  if (!done.recent || !CONFIG_CHECKS_.GROUP_CHAT_ID(cfg)) return;
+  if (!CONFIG_CHECKS_.GROUP_CHAT_ID(cfg)) return;
+  if (done.lateMessage) {
+    // The same message, now saying the on-time window has closed; its button stays for late check-ins.
+    const m = done.lateMessage;
+    const edited = editText_(botToken_(), m.chatId, m.messageId, lateText_(done.nowLate), checkinKeyboard_(cfg, true));
+    if (!edited.ok) console.warn('Could not edit the live message for the late window: ' + edited.description);
+  }
+  if (!done.recent) return;
 
   const token = botToken_();
   const text = closedText_(done.recent, readGroups_());
@@ -146,7 +177,7 @@ function closeExpiredSessions_() {
  */
 function tallyLog_(sessionIds) {
   const tally = {};
-  sessionIds.forEach((id) => { tally[id] = { count: 0, groups: {}, people: [] }; });
+  sessionIds.forEach((id) => { tally[id] = { count: 0, late: 0, groups: {}, people: [] }; });
   const sheet = sheet_(SHEETS_.LOG);
   const last = sheet.getLastRow();
   if (last < 1) return tally;
@@ -157,9 +188,13 @@ function tallyLog_(sessionIds) {
     if (!t) continue;
     const r = values[i];
     const group = String(r[LOG_COL_.GROUP - 1]).trim();
+    const minutesLate = Number(r[LOG_COL_.MINUTES_LATE - 1]) || 0;
     t.count++;
+    if (minutesLate) t.late++;
     t.groups[group] = (t.groups[group] || 0) + 1;
     t.people.push({
+      rank: String(r[LOG_COL_.RANK - 1]).trim(),
+      minutesLate: minutesLate,
       at: toDate_(r[LOG_COL_.TIMESTAMP - 1]),
       userId: String(r[LOG_COL_.USER_ID - 1]).trim(),
       fullName: String(r[LOG_COL_.FULL_NAME - 1]).trim(),
@@ -172,11 +207,14 @@ function tallyLog_(sessionIds) {
   return tally;
 }
 
-/** "Check-in closed at 11:02 · 23 checked in" plus a line per group, in the Groups tab's order. */
+/**
+ * "Check-in closed at 11:02 · 23 checked in (4 late)" plus a line per group, in the Groups tab's
+ * order. It closes when its late window ends (or a new check-in ended it early).
+ */
 function closedText_(session, groupOrder) {
   const t = session.tally;
-  const head = 'Check-in closed at ' + hhmm_(session.closesAt) + ' · ' +
-    (t.count ? t.count + ' checked in' : 'nobody checked in');
+  const head = 'Check-in closed at ' + hhmm_(session.lateUntil) + ' · ' +
+    (t.count ? t.count + ' checked in' + (t.late ? ' (' + t.late + ' late)' : '') : 'nobody checked in');
   const parts = groupBreakdown_(t.groups, groupOrder);
   return parts.length ? head + '\n' + parts.join(' · ') : head;
 }

@@ -84,6 +84,7 @@ function setup({ statuses = {}, config = {}, telegram = {}, groups = [], props =
   const values = {
     GROUP_CHAT_ID: GROUP,
     MINI_APP_LINK: 'https://t.me/test_checkin_bot/checkin',
+    LATE_MINUTES: '0', // most tests describe check-ins without a late window; late.test.js sets one
     ...config,
   };
   const cfg = env.sheet('Config');
@@ -98,7 +99,8 @@ function setup({ statuses = {}, config = {}, telegram = {}, groups = [], props =
   env.req = (action, user, extra = {}) => env.post({ action, initData: env.initData(user), platform: 'android', ...extra });
   env.start = (user, location = SITE_FIX) => env.req('startSession', user, { location });
   env.checkin = (user, location = ONSITE, extra = {}) => env.req('checkin', user, { location, ...extra });
-  env.saveProfile = (user, fullName, group) => env.req('saveProfile', user, { fullName, group });
+  env.saveProfile = (user, fullName, group, rank) =>
+    env.req('saveProfile', user, rank === undefined ? { fullName, group } : { fullName, group, rank });
   env.rows = (name) => env.sheet(name).rows();
   /** Data rows as objects keyed by the tab's header row, so tests don't depend on column positions. */
   env.records = (name) => {

@@ -637,7 +637,7 @@ test('profile: first check-in -> no profile yet; saving one fills the Members ta
 
   const saved = env.saveProfile(MEMBER, '  Cy   Tan ', 'Bravo');
   assert.equal(saved.code, 'PROFILE_SAVED');
-  assert.deepEqual(saved.data.profile, { fullName: 'Cy Tan', group: 'Bravo' });
+  assert.deepEqual(saved.data.profile, { rank: '', fullName: 'Cy Tan', group: 'Bravo' });
   const [m] = env.rows('Members');
   assert.deepEqual(m.slice(0, 5), [String(MEMBER.id), 'Cy Tan', 'Bravo', 'Cy Member', 'cy']);
   assert.equal(m[5].getTime(), T0);
@@ -649,9 +649,9 @@ test('profile: remembered, so the next check-in is filed straight away', () => {
   env.saveProfile(MEMBER, 'Cy Tan', 'Alpha');
   env.start(ADMIN);
   const res = env.checkin(MEMBER);
-  assert.deepEqual(res.data.profile, { fullName: 'Cy Tan', group: 'Alpha' });
+  assert.deepEqual(res.data.profile, { rank: '', fullName: 'Cy Tan', group: 'Alpha' });
   assert.deepEqual([env.records('Log')[0].full_name, env.records('Log')[0].group], ['Cy Tan', 'Alpha']);
-  assert.deepEqual(env.checkin(MEMBER).data.profile, { fullName: 'Cy Tan', group: 'Alpha' }, 'also on ALREADY_CHECKED_IN');
+  assert.deepEqual(env.checkin(MEMBER).data.profile, { rank: '', fullName: 'Cy Tan', group: 'Alpha' }, 'also on ALREADY_CHECKED_IN');
   // Changing it later updates the Members row, not a second one.
   env.saveProfile(MEMBER, 'Cy Tan', 'Bravo');
   assert.equal(env.rows('Members').length, 1);
@@ -665,7 +665,7 @@ test('profile: status shows it to someone already checked in, and only then', ()
   assert.equal(env.req('status', MEMBER).data.profile, undefined);
   env.checkin(MEMBER);
   const s = env.req('status', MEMBER).data;
-  assert.deepEqual([s.groups, s.profile], [['Alpha'], { fullName: 'Cy Tan', group: 'Alpha' }]);
+  assert.deepEqual([s.groups, s.profile], [['Alpha'], { rank: '', fullName: 'Cy Tan', group: 'Alpha' }]);
 });
 
 test('profile: the group must be on the Groups tab; a removed group is asked for again', () => {
@@ -680,7 +680,7 @@ test('profile: the group must be on the Groups tab; a removed group is asked for
   env.sheet('Groups').getRange(3, 1).setValue('Bravo Team'); // the owner renames it
   env.setNow(T0 + 61 * 1000); // the Groups copy lasts a minute
   env.start(ADMIN);
-  assert.deepEqual(env.checkin(MEMBER).data.profile, { fullName: 'Cy Tan', group: '' });
+  assert.deepEqual(env.checkin(MEMBER).data.profile, { rank: '', fullName: 'Cy Tan', group: '' });
   assert.equal(env.records('Log')[0].group, '');
 });
 
@@ -689,7 +689,7 @@ test('profile: names must be real text of sensible length; odd characters are cl
   for (const name of ['', '   ', undefined, 42, { a: 1 }, 'x'.repeat(61)]) {
     assert.equal(env.saveProfile(MEMBER, name, 'Alpha').code, 'INVALID_NAME', JSON.stringify(name));
   }
-  assert.match(env.saveProfile(MEMBER, '', 'Alpha').message, /rank and full name/);
+  assert.match(env.saveProfile(MEMBER, '', 'Alpha').message, /Please enter your full name/);
   assert.equal(env.saveProfile(MEMBER, 'x'.repeat(60), 'Alpha').code, 'PROFILE_SAVED');
   const r = env.saveProfile(MEMBER, 'Wei‮Ling\nTan  李', 'Alpha');
   assert.equal(r.data.profile.fullName, 'Wei Ling Tan 李');
@@ -720,7 +720,7 @@ test('profile: with no groups defined, only the name is kept', () => {
   const env = setup();
   const r = env.saveProfile(MEMBER, 'Cy Tan', 'Anything');
   assert.equal(r.code, 'PROFILE_SAVED');
-  assert.deepEqual(r.data, { groups: [], profile: { fullName: 'Cy Tan', group: '' } });
+  assert.deepEqual(r.data, { groups: [], profile: { rank: '', fullName: 'Cy Tan', group: '' } });
 });
 
 test('profile: the Groups tab is read as the owner typed it (blanks, repeats, spaces)', () => {
@@ -735,7 +735,7 @@ test('profile: a Members id the owner retyped as a number is still found', () =>
   env.saveProfile(MEMBER, 'Cy Tan', 'Alpha');
   env.sheet('Members').getRange(2, 1).setValue(MEMBER.id);
   env.start(ADMIN);
-  assert.deepEqual(env.checkin(MEMBER).data.profile, { fullName: 'Cy Tan', group: 'Alpha' });
+  assert.deepEqual(env.checkin(MEMBER).data.profile, { rank: '', fullName: 'Cy Tan', group: 'Alpha' });
 });
 
 // ---------- setup() ----------
@@ -1098,7 +1098,7 @@ test('settings: an admin changes the time, distance and accuracy from the app; t
   assert.equal(env.req('status', MEMBER).data.maxAccuracyM, 100, 'status tells the app the accuracy needed too');
   const r = saveSettings(env, ADMIN, SETTINGS);
   assert.equal(r.code, 'SETTINGS_SAVED');
-  assert.deepEqual(r.data, SETTINGS);
+  assert.deepEqual(r.data, { ...SETTINGS, lateMinutes: 0 });
   assert.deepEqual([env.config('SESSION_MINUTES'), env.config('RADIUS_M'), env.config('MAX_ACCURACY_M')], ['45', '250', '80']);
   const s = env.req('status', MEMBER).data; // no minute-long wait for the Config copy
   assert.deepEqual([s.sessionMinutes, s.radiusM, s.maxAccuracyM], [45, 250, 80]);
@@ -1199,7 +1199,7 @@ test('settings: only the values sent are changed (an admin with an old screen ca
   saveSettings(env, ADMIN2, { maxAccuracyM: 200 });
   const r = saveSettings(env, ADMIN, { sessionMinutes: 45 });
   assert.equal(r.code, 'SETTINGS_SAVED');
-  assert.deepEqual(r.data, { sessionMinutes: 45, radiusM: 150, maxAccuracyM: 200 }, 'the reply has all three, as they now are');
+  assert.deepEqual(r.data, { sessionMinutes: 45, radiusM: 150, maxAccuracyM: 200, lateMinutes: 0 }, 'the reply has them all, as they now are');
   assert.deepEqual([env.config('SESSION_MINUTES'), env.config('RADIUS_M'), env.config('MAX_ACCURACY_M')], ['45', '150', '200']);
   const none = saveSettings(env, ADMIN, {});
   assert.equal(none.code, 'INVALID_SETTINGS');

@@ -69,9 +69,10 @@ function bumpConfigCache_() {
  * sessions that haven't ended, which is all a status check needs.
  */
 function cacheSessions_(sessions, nowMs) {
-  const live = sessions.filter((s) => s.closesAt.getTime() > nowMs).map((s) => ({
+  const live = sessions.filter((s) => s.lateUntil.getTime() > nowMs).map((s) => ({
     row: s.row, id: s.id, startedById: s.startedById, startedByName: s.startedByName,
-    opensAt: s.opensAt.getTime(), closesAt: s.closesAt.getTime(), status: s.status, count: s.count,
+    opensAt: s.opensAt.getTime(), closesAt: s.closesAt.getTime(), lateUntil: s.lateUntil.getTime(),
+    status: s.status, count: s.count,
   }));
   cachePutJson_(SESSIONS_CACHE_KEY_, live, CACHE_SEC_.SESSIONS);
 }
@@ -80,7 +81,8 @@ function cacheSessions_(sessions, nowMs) {
 function sessionsForRead_() {
   const copy = cacheGetJson_(SESSIONS_CACHE_KEY_);
   if (!Array.isArray(copy)) return readSessions_();
-  return copy.map((s) => Object.assign({}, s, { opensAt: new Date(s.opensAt), closesAt: new Date(s.closesAt) }));
+  return copy.map((s) => Object.assign({}, s, { opensAt: new Date(s.opensAt), closesAt: new Date(s.closesAt),
+    lateUntil: new Date(s.lateUntil || s.closesAt) })); // a copy made before late windows has none
 }
 
 // ---------- who has checked in ----------

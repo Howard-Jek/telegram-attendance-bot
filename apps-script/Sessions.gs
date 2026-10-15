@@ -1,26 +1,30 @@
 /**
  * Sessions: status, starting a session at the admin's location, moving that location, and
- * active-session lookup. Enforcement is always closes_at vs. server time; the `status` column
- * only records whether the close job has announced the result.
+ * active-session lookup. A session takes check-ins from opens_at to late_until: on time until
+ * closes_at, then late (late_until is closes_at when there is no late window). Enforcement is
+ * always against server time; the `status` column (open, late, closed) only records what the close
+ * job has announced.
  */
 
 function handleStatus_(ctx) {
   const admin = checkAdmin_(ctx);
   if (admin === 'BUSY') return reply_(false, 'BUSY', MESSAGES_.BUSY);
   // Served from the copies in Cache.gs when possible: this is the first call on every open.
-  const session = findActiveSession_(sessionsForRead_(), now_().getTime());
+  const nowMs = now_().getTime();
+  const session = findActiveSession_(sessionsForRead_(), nowMs);
   let mine = session ? knownCheckin_(session, ctx.user.id) : null;
   if (mine === undefined) mine = findCheckin_(dedupeKey_(session.id, ctx.user.id));
-  const view = session ? sessionView_(session) : null;
+  const view = session ? sessionView_(session, nowMs) : null;
   if (view && !admin) delete view.startedByName; // anyone with the link can call status
   if (view && admin) view.startedByMe = isStarter_(session, ctx.user); // only they may change it
   const data = {
     isAdmin: admin,
     sessionMinutes: ctx.cfg.sessionMinutes,
+    lateMinutes: ctx.cfg.lateMinutes,
     radiusM: ctx.cfg.radiusM,
     maxAccuracyM: ctx.cfg.maxAccuracyM,
     activeSession: view,
-    myCheckin: mine ? { at: mine.at.toISOString(), atText: hhmm_(mine.at) } : null,
+    myCheckin: mine ? Object.assign({ at: mine.at.toISOString(), atText: hhmm_(mine.at) }, lateness_(session, mine.at)) : null,
   };
   // Only a checked-in member sees their group and name straight away; others get them with the check-in.
   if (mine) Object.assign(data, profileData_(ctx.user.id));
@@ -34,33 +38,41 @@ function handleStartSession_(ctx, body) {
   const admin = checkAdmin_(ctx);
   if (admin === 'BUSY') return reply_(false, 'BUSY', MESSAGES_.BUSY);
   if (!admin) return reply_(false, 'NOT_ADMIN', MESSAGES_.NOT_ADMIN);
-  assertConfig_(cfg, ['SESSION_MINUTES', 'MAX_ACCURACY_M']);
+  assertConfig_(cfg, ['SESSION_MINUTES', 'LATE_MINUTES', 'MAX_ACCURACY_M']);
   const site = parseSite_(body.location, cfg);
   if (!site.ok) return site.reply;
 
   const result = withScriptLock_(() => {
     const now = now_();
-    // Any session still running blocks every admin, including the one who started it.
+    // A session in its on-time window blocks every admin, including the one who started it.
     const sessions = readSessions_();
     const blocking = findBlockingSession_(sessions, now.getTime());
     if (blocking) {
       cacheSessions_(sessions, now.getTime());
       return { blocking: blocking };
     }
+    // One in its late window doesn't: the new session ends that window now.
+    const sheet = sheet_(SHEETS_.SESSIONS);
+    const ending = findActiveSession_(sessions, now.getTime());
+    if (ending) {
+      sheet.getRange(ending.row, SESSION_COL_.LATE_UNTIL).setValue(now);
+      ending.lateUntil = now;
+    }
 
+    const closesAt = new Date(now.getTime() + cfg.sessionMinutes * 60 * 1000);
     const session = {
       id: 'S-' + Utilities.formatDate(now, TZ_, 'yyyyMMdd-HHmm'),
       startedById: user.id,
       startedByName: user.name,
       opensAt: now,
-      closesAt: new Date(now.getTime() + cfg.sessionMinutes * 60 * 1000),
+      closesAt: closesAt,
+      lateUntil: new Date(closesAt.getTime() + cfg.lateMinutes * 60 * 1000),
     };
     // The point first: if it can't be saved, no session is opened without one (a point left
     // behind by a failed row is removed by the close job).
     saveSite_(session.id, site);
-    const sheet = sheet_(SHEETS_.SESSIONS);
     sheet.appendRow([session.id, Number(user.id), textCell_(user.name), session.opensAt, session.closesAt,
-      '', 'open', 0, round1_(site.accuracy)]);
+      '', 'open', 0, round1_(site.accuracy), session.lateUntil]);
     session.row = sheet.getLastRow();
     session.status = 'open';
     session.count = 0;
@@ -69,19 +81,27 @@ function handleStartSession_(ctx, body) {
     // Its tab, made now (under the lock, so the close job can't make a second one) and before the
     // group is told, so nobody is queueing behind it yet. A failure must not stop the check-in.
     try {
-      writeSessionTab_(ensureSessionTab_(session), session, [], readGroups_(), false);
+      writeSessionTab_(ensureSessionTab_(session), session, [], readGroups_(), false, null);
       SpreadsheetApp.flush(); // Sheets applies writes later; any error surfaces here, inside the try
     } catch (err) {
       console.warn('Could not make the session tab for ' + session.id + ' (the close job will try again): ' +
         redactSecrets_(String(err && err.message)));
     }
-    return { session: session };
+    // The Nominal Roll starts again for the new session (no colours until someone checks in).
+    try {
+      const roll = readRoll_();
+      if (roll) writeRollColours_(roll, session, [], now.getTime());
+      SpreadsheetApp.flush();
+    } catch (err) {
+      console.warn('Could not reset the Nominal Roll tab: ' + redactSecrets_(String(err && err.message)));
+    }
+    return { session: session, endedLateOf: ending ? ending.startedByName : null };
   });
 
   if (!result) return reply_(false, 'BUSY', MESSAGES_.BUSY);
   if (result.blocking) {
     const b = result.blocking;
-    const view = sessionView_(b);
+    const view = sessionView_(b, now_().getTime());
     // The Mini App may send a request twice when replies are slow; its own earlier start comes back here.
     view.startedByMe = b.startedById === user.id;
     return reply_(false, 'SESSION_ACTIVE',
@@ -90,8 +110,9 @@ function handleStartSession_(ctx, body) {
 
   // Announce in the group outside the lock: it is a network call, and a failure must not undo the session.
   const s = result.session;
-  const data = sessionView_(s);
+  const data = sessionView_(s, s.opensAt.getTime());
   data.startedByMe = true;
+  if (result.endedLateOf) data.endedLateOf = result.endedLateOf;
   // The rules it runs with, which another admin may have changed since this admin's app loaded.
   data.radiusM = cfg.radiusM;
   data.maxAccuracyM = cfg.maxAccuracyM;
@@ -125,7 +146,7 @@ function handleMoveSite_(ctx, body) {
     sheet_(SHEETS_.SESSIONS).getRange(session.row, SESSION_COL_.SITE_ACCURACY).setValue(round1_(site.accuracy));
     cacheSessions_(sessions, nowMs);
     console.info('Session ' + session.id + ' check-in point moved by user ' + ctx.user.id);
-    return reply_(true, 'SITE_MOVED', 'The check-in point is now where you are.', Object.assign(sessionView_(session), { startedByMe: true }));
+    return reply_(true, 'SITE_MOVED', 'The check-in point is now where you are.', Object.assign(sessionView_(session, nowMs), { startedByMe: true }));
   });
   return result || reply_(false, 'BUSY', MESSAGES_.BUSY);
 }
@@ -157,7 +178,7 @@ function readSite_(sessionId) {
 /** Call with the script lock held: deletes the points of sessions that can't take check-ins any more. */
 function pruneSites_(sessions, nowMs) {
   const keep = {};
-  sessions.forEach((s) => { if (s.closesAt.getTime() > nowMs) keep[SITE_PROP_PREFIX_ + s.id] = true; });
+  sessions.forEach((s) => { if (s.lateUntil.getTime() > nowMs) keep[SITE_PROP_PREFIX_ + s.id] = true; });
   const props = PropertiesService.getScriptProperties();
   props.getKeys().forEach((k) => {
     if (k.indexOf(SITE_PROP_PREFIX_) === 0 && !keep[k]) props.deleteProperty(k);
@@ -213,7 +234,30 @@ function announceSession_(ctx, session) {
 }
 
 function openText_(session) {
-  return '📍 Check-in is open until ' + hhmm_(session.closesAt) + '.\nTap the button when you arrive.';
+  const late = hasLateWindow_(session)
+    ? '\nAfter ' + hhmm_(session.closesAt) + ' it’s marked late, until ' + hhmm_(session.lateUntil) + '.' : '';
+  return '📍 Check-in is open until ' + hhmm_(session.closesAt) + '.\nTap the button when you arrive.' + late;
+}
+
+/** The live message once the on-time window has closed (the button stays, for late check-ins). */
+function lateText_(session) {
+  return '⏰ On-time check-in closed at ' + hhmm_(session.closesAt) + '.\nStill on the way? Tap the button by ' +
+    hhmm_(session.lateUntil) + ' to check in late.';
+}
+
+/** The live message for the session, as it should read now. */
+function liveText_(session, nowMs) {
+  return nowMs >= session.closesAt.getTime() ? lateText_(session) : openText_(session);
+}
+
+function hasLateWindow_(session) {
+  return session.lateUntil.getTime() > session.closesAt.getTime();
+}
+
+/** {late, minutesLate} of a check-in at `at` (minutesLate 0 when on time, else at least 1). */
+function lateness_(session, at) {
+  const ms = at.getTime() - session.closesAt.getTime();
+  return ms < 0 ? { late: false, minutesLate: 0 } : { late: true, minutesLate: Math.max(1, Math.ceil(ms / 60000)) };
 }
 
 /**
@@ -242,6 +286,7 @@ function readSessions_() {
       startedByName: String(r[SESSION_COL_.STARTED_BY_NAME - 1]),
       opensAt: opensAt,
       closesAt: closesAt,
+      lateUntil: lateUntilOf_(r[SESSION_COL_.LATE_UNTIL - 1], closesAt),
       status: String(r[SESSION_COL_.STATUS - 1]).trim(),
       count: Number(r[SESSION_COL_.COUNT - 1]) || 0,
     });
@@ -249,12 +294,17 @@ function readSessions_() {
   return sessions;
 }
 
-/** The session with opens_at <= now < closes_at (latest if, somehow, several). */
-function findActiveSession_(sessions, nowMs) {
-  return latest_(sessions.filter((s) => s.opensAt.getTime() <= nowMs && nowMs < s.closesAt.getTime()));
+/** Sessions from before late check-ins (blank), or a value edited into nonsense, have no late window. */
+function lateUntilOf_(v, closesAt) {
+  return isDate_(v) && !isNaN(v.getTime()) && v.getTime() > closesAt.getTime() ? v : closesAt;
 }
 
-/** Any session with closes_at > now blocks starting a new one. */
+/** The session taking check-ins now, on time or late: opens_at <= now < late_until (the newest if several). */
+function findActiveSession_(sessions, nowMs) {
+  return latestStarted_(sessions.filter((s) => s.opensAt.getTime() <= nowMs && nowMs < s.lateUntil.getTime()));
+}
+
+/** A session in its on-time window (closes_at > now) blocks starting a new one. */
 function findBlockingSession_(sessions, nowMs) {
   return latest_(sessions.filter((s) => s.closesAt.getTime() > nowMs));
 }
@@ -267,12 +317,24 @@ function latest_(sessions) {
   return best;
 }
 
-function sessionView_(s) {
+function latestStarted_(sessions) {
+  let best = null;
+  sessions.forEach((s) => {
+    if (!best || s.opensAt.getTime() > best.opensAt.getTime()) best = s;
+  });
+  return best;
+}
+
+/** nowMs says whether it is in its late window yet. */
+function sessionView_(s, nowMs) {
   return {
     sessionId: s.id,
     opensAt: s.opensAt.toISOString(),
     closesAt: s.closesAt.toISOString(),
     closesAtText: hhmm_(s.closesAt),
+    lateUntil: s.lateUntil.toISOString(),
+    lateUntilText: hhmm_(s.lateUntil),
+    late: nowMs >= s.closesAt.getTime(),
     startedByName: s.startedByName,
   };
 }

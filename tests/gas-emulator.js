@@ -52,6 +52,28 @@ class MockRange {
     for (let r = 0; r < this.numRows; r++) for (let c = 0; c < this.numCols; c++) this.sheet._set(this.row + r, this.col + c, v);
     return this;
   }
+  setBackgrounds(colors) {
+    if (!Array.isArray(colors) || colors.length !== this.numRows || colors.some((l) => l.length !== this.numCols)) {
+      throw new Error(`The number of rows or columns in the data does not match the range (${this.numRows}x${this.numCols}).`);
+    }
+    colors.forEach((line, r) => line.forEach((c, k) => {
+      const key = `${this.row + r}:${this.col + k}`;
+      if (c === null) this.sheet.backgrounds.delete(key); else this.sheet.backgrounds.set(key, c);
+    }));
+    return this;
+  }
+  setBackground(color) {
+    return this.setBackgrounds(Array.from({ length: this.numRows }, () => Array(this.numCols).fill(color)));
+  }
+  getBackgrounds() {
+    const out = [];
+    for (let r = 0; r < this.numRows; r++) {
+      const line = [];
+      for (let c = 0; c < this.numCols; c++) line.push(this.sheet.backgrounds.get(`${this.row + r}:${this.col + c}`) || '#ffffff');
+      out.push(line);
+    }
+    return out;
+  }
   setNumberFormat(fmt) {
     for (let r = 0; r < this.numRows; r++) for (let c = 0; c < this.numCols; c++) this.sheet.formats.set(`${this.row + r}:${this.col + c}`, fmt);
     return this;
@@ -95,6 +117,7 @@ class MockSheet {
     this.maxRows = 1000;
     this.maxCols = 26;
     this.metadata = [];
+    this.backgrounds = new Map();
     this.id = ss.nextSheetId++;
   }
   getName() { return this.name; }

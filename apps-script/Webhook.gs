@@ -246,8 +246,9 @@ function onGroupCheckin_(ctx, msg) {
     sendText_(ctx.token, msg.chat.id, NOT_READY_TEXT_);
     return;
   }
-  const session = findActiveSession_(sessionsForRead_(), now_().getTime());
-  const text = session ? openText_(session) : '📍 No check-in is open right now. Admins can start one from this button.';
+  const nowMs = now_().getTime();
+  const session = findActiveSession_(sessionsForRead_(), nowMs);
+  const text = session ? liveText_(session, nowMs) : '📍 No check-in is open right now. Admins can start one from this button.';
   const posted = postLiveMessage_(ctx, text, session ? session.id : '');
   if (!posted.ok) console.warn('Could not post the Check in button: ' + posted.description);
 }

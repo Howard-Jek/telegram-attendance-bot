@@ -89,16 +89,18 @@ function handleCheckin_(ctx, body) {
       return outOfRange_(session, user, distance, cfg, isAdmin, now);
     }
 
-    // 9. Accept.
+    // 9. Accept, on time or late (minutes_late is blank when on time).
     const p = profile.profile;
+    const late = lateness_(session, now);
     sheet_(SHEETS_.LOG).appendRow([now, session.id, Number(user.id), textCell_(user.firstName),
       textCell_(user.lastName), textCell_(user.username), round1_(loc.accuracy),
-      Math.round(distance), key, textCell_(p ? p.fullName : ''), groupCell_(p ? p.group : '')]);
+      Math.round(distance), key, textCell_(p ? p.fullName : ''), groupCell_(p ? p.group : ''),
+      textCell_(p ? p.rank : ''), late.late ? late.minutesLate : '']);
     // checkin_count is left to the close job (refreshed every 5 minutes): one write per check-in
     // keeps the time each holds the lock, and so the queue in a crowd, as short as possible.
     SpreadsheetApp.flush(); // the copy may only say "checked in" once the row is really there
     rememberCheckin_(session, user.id, now, now);
-    return reply_(true, 'CHECKED_IN', 'Checked in at ' + hhmm_(now) + '.',
+    return reply_(true, 'CHECKED_IN', 'Checked in' + (late.late ? ' late' : '') + ' at ' + hhmm_(now) + '.',
       Object.assign(checkinView_(session, now), profile));
   });
 
@@ -134,9 +136,9 @@ function outOfRange_(session, user, distance, cfg, isAdmin, now) {
     { distanceM: rounded, rounded: true, radiusM: cfg.radiusM });
 }
 
-/** A CacheService lifetime that lasts until the session closes (within the 6-hour maximum). */
+/** A CacheService lifetime that lasts until the session stops taking check-ins (late window included). */
 function secondsUntilClose_(session, now) {
-  return Math.min(21600, Math.max(1, Math.ceil((session.closesAt.getTime() - now.getTime()) / 1000)));
+  return Math.min(21600, Math.max(1, Math.ceil((session.lateUntil.getTime() - now.getTime()) / 1000)));
 }
 
 function dedupeKey_(sessionId, userId) {
@@ -201,11 +203,12 @@ function logRejectedIfSessionOpen_(user, reason) {
 }
 
 function checkinView_(session, at) {
-  return {
+  return Object.assign({
     sessionId: session.id,
     at: at.toISOString(),
     atText: hhmm_(at),
     closesAt: session.closesAt.toISOString(),
     closesAtText: hhmm_(session.closesAt),
-  };
+    lateUntilText: hhmm_(session.lateUntil),
+  }, lateness_(session, at));
 }
