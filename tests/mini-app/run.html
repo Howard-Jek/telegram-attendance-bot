@@ -133,17 +133,18 @@
       if (e.openedLinks && JSON.stringify(log.openedLinks) !== JSON.stringify(e.openedLinks)) errors.push('links ' + JSON.stringify(log.openedLinks));
       if (e.stampFits) {
         var st = doc().querySelector('.stamp'), tm = doc().querySelector('.stamp-time'), lb = doc().querySelector('.stamp-label');
+        var lateLb = doc().querySelector('.stamp-late');
         var cs = function (n) { return win().getComputedStyle(n); };
         // Layout size, not the on-screen box: the stamp's press-in animation scales it.
         if (tm.offsetHeight > parseFloat(cs(tm).fontSize) * 1.5) errors.push('stamp time wraps');
         // Every corner of the label and the time must sit inside the inner ring (inset 8px, 1px line).
         var c = st.clientWidth / 2, r = c - 9;
-        [lb, tm].forEach(function (n) {
+        [lb, tm].concat(lateLb ? [lateLb] : []).forEach(function (n) {
           var half = parseFloat(cs(n).fontSize) * 0.375; // glyph height, not the line box
           var mid = n.offsetTop + n.offsetHeight / 2;
           [[n.offsetLeft, mid - half], [n.offsetLeft + n.offsetWidth, mid - half],
             [n.offsetLeft, mid + half], [n.offsetLeft + n.offsetWidth, mid + half]].forEach(function (pt) {
-            if (Math.hypot(pt[0] - c, pt[1] - c) > r) errors.push((n === lb ? 'label' : 'time') + ' crosses the ring');
+            if (Math.hypot(pt[0] - c, pt[1] - c) > r) errors.push((n === lb ? 'label' : n === lateLb ? 'late label' : 'time') + ' crosses the ring');
           });
         });
       }
@@ -195,8 +196,13 @@
       if (e.sentSettings) {
         var sets = log.calls.filter(function (c) { return c.action === 'saveSettings'; });
         var lastSet = sets[sets.length - 1];
-        var gotSet = lastSet ? { sessionMinutes: lastSet.sessionMinutes, radiusM: lastSet.radiusM, maxAccuracyM: lastSet.maxAccuracyM } : null;
-        if (JSON.stringify(gotSet) !== JSON.stringify(e.sentSettings)) errors.push('saved settings ' + JSON.stringify(gotSet));
+        // Exactly the fields sent (key order aside): an unchanged field must not be sent.
+        var sorted = function (o) { return o && JSON.stringify(Object.keys(o).sort().map(function (k) { return [k, o[k]]; })); };
+        var gotSet = lastSet ? ['sessionMinutes', 'lateMinutes', 'radiusM', 'maxAccuracyM'].reduce(function (o, k) {
+          if (lastSet[k] !== undefined) o[k] = lastSet[k];
+          return o;
+        }, {}) : null;
+        if (sorted(gotSet) !== sorted(e.sentSettings)) errors.push('saved settings ' + JSON.stringify(gotSet));
         if (!lastSet || !/^[A-Za-z0-9_-]{8,40}$/.test(lastSet.saveId || '')) errors.push('save without a valid saveId');
       }
       if (e.oneSaveId) {
@@ -211,7 +217,7 @@
       if (e.sentProfile) {
         var saves = log.calls.filter(function (c) { return c.action === 'saveProfile'; });
         var last = saves[saves.length - 1];
-        var got = last ? { fullName: last.fullName, group: last.group } : null;
+        var got = last ? Object.keys(e.sentProfile).reduce(function (o, k) { o[k] = last[k]; return o; }, {}) : null;
         if (JSON.stringify(got) !== JSON.stringify(e.sentProfile)) errors.push('saved profile ' + JSON.stringify(got));
       }
       if (e.startLocation) {

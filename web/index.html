@@ -181,11 +181,22 @@
      sized in the stamp's own em, so the label keeps clear of the ring's curve at any text size. */
   .stamp.is-compact { gap: 0; font-size: var(--t-stamp-compact); width: 4.5em; height: 4.5em; }
   .stamp.is-compact .stamp-label { font-size: 0.4em; }
+  /* A late check-in: the same stamp, with how late along its bottom edge. */
+  .stamp-late { margin-top: var(--s1); }
+  .stamp.is-compact .stamp-late { margin-top: 0; }
   .stamp-time { font-size: 1em; font-weight: 800; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
 
   /* Group and name, asked once under the stamp. */
   .picker { display: flex; flex-direction: column; gap: var(--s3); width: 100%; max-width: 26rem; margin-top: var(--s2); text-align: left; }
   .field { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s2); }
+  /* Rank and full name side by side; the name drops below the rank when text is large. */
+  .name-row { display: flex; flex-wrap: wrap; column-gap: var(--s3); }
+  .name-row .field { margin-bottom: 0; }
+  .name-row .field-rank { flex: 0 0 6.5rem; }
+  .name-row .field-name { flex: 1 1 11rem; min-width: 0; }
+  .name-row + .field-help { margin-top: calc(var(--s1) - var(--s3)); }
+  #rank { text-transform: uppercase; }
+  #rank::placeholder { text-transform: none; }
   .input {
     appearance: none;
     width: 100%;
@@ -407,7 +418,9 @@
   var savingProfile = false;
   var pickerError = '';
   var nameInvalid = false;
+  var rankInvalid = false;
   var draftName = null;    // what they typed, kept across re-renders
+  var draftRank = null;
   var justMoved = false;   // an admin just moved the check-in point (said once on the next screen)
   var justSaved = null;    // {sent, now}: the settings an admin just saved (said once on the next screen)
   var settingsBack = null; // {cancel, saved}: where the settings screen goes next
@@ -427,7 +440,23 @@
   function sessionMeta() {
     var s = status && status.activeSession;
     if (!s) return '';
-    return 'Open until ' + s.closesAtText + (status.isAdmin && s.startedByName ? ' · started by ' + s.startedByName : '');
+    return windowText(s) + (status.isAdmin && s.startedByName ? ' · started by ' + s.startedByName : '');
+  }
+
+  // "Open until 11:30", or once on time is over, "On time until 11:30 · late until 12:30".
+  function windowText(s) {
+    return s.late ? 'On time until ' + s.closesAtText + ' · late until ' + s.lateUntilText : 'Open until ' + s.closesAtText;
+  }
+
+  function minutes(n) {
+    return n + (n === 1 ? ' minute' : ' minutes');
+  }
+
+  // During another check-in's late window, any admin may start the next one (which ends that window).
+  function withNewStart(actions) {
+    var s = status && status.activeSession;
+    if (!(status && status.isAdmin === true && s && s.late)) return actions;
+    return actions.concat([{ label: 'Start a new check-in', onClick: startSession }]);
   }
 
   function radiusText() {
@@ -479,9 +508,11 @@
     },
     adminIdle: function () {
       var mins = (status && status.sessionMinutes) || 60;
+      var lateMins = (status && status.lateMinutes) || 0;
       var idle = function () { render(views.adminIdle()); };
       return { state: 'admin-idle', icon: 'flag', title: 'No check-in open',
-        line: 'Start one where you’re standing. Members within ' + radiusText() + ' of you can check in for the next ' + mins + ' minutes.',
+        line: 'Start one where you’re standing. Members within ' + radiusText() + ' of you can check in for the next ' + mins +
+          ' minutes' + (lateMins ? ', then late for ' + lateMins + ' more.' : '.'),
         meta: takeSaved(true), // "Saved." as a result, beside the numbers it changed
         hint: 'Once started, a check-in can’t be ended early.',
         actions: withSettings([{ label: 'Start check-in (' + mins + ' min)', primary: true, onClick: startSession }], idle, idle) };
@@ -491,7 +522,7 @@
       var open = !!(status && status.activeSession);
       return { state: 'settings', icon: 'sliders', smallMark: true, noMark: settingsNoMark, title: 'Check-in settings',
         line: open
-          ? 'Distance and accuracy apply straight away. The time applies from the next check-in.'
+          ? 'Distance and accuracy apply straight away. The times apply from the next check-in.'
           : 'These apply to every check-in, whichever admin starts it.',
         say: settingsNotice, body: settingsEl(), onBack: closeSettings,
         actions: [{ label: 'Save', primary: true, onClick: function (e) { saveSettings(e.currentTarget); } },
@@ -510,29 +541,41 @@
       // The distance comes from the start reply: another admin may have changed it since this app loaded.
       if (typeof data.radiusM === 'number') status.radiusM = data.radiusM;
       if (typeof data.maxAccuracyM === 'number') status.maxAccuracyM = data.maxAccuracyM;
+      var late = data.lateUntilText && data.lateUntilText !== data.closesAtText ? ', late until ' + data.lateUntilText : '';
+      var hints = [];
+      if (data.endedLateOf) hints.push('Late check-ins for ' + data.endedLateOf + '’s check-in have ended.');
+      if (pointFromLastKnown) hints.push('Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.');
       return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
         line: 'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
-        meta: 'Open until ' + data.closesAtText + ' · within ' + radiusText(), notice: data.warning, actions: actions,
-        hint: pointFromLastKnown ? 'Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.' : '' };
+        meta: 'Open until ' + data.closesAtText + late + ' · within ' + radiusText(), notice: data.warning, actions: actions,
+        hint: hints.join(' ') };
     },
     ready: function (line) {
       var s = status && status.activeSession;
-      var view = { state: 'ready', icon: 'pin', title: 'Check-in is open',
-        line: line || 'Tap Check in when you’re at the venue.',
-        meta: line && s ? 'Open until ' + s.closesAtText : sessionMeta(), // the line already names the starter
+      var late = !!(s && s.late);
+      var view = { state: late ? 'ready-late' : 'ready', icon: late ? 'clock' : 'pin',
+        title: late ? 'On-time check-in has closed' : 'Check-in is open',
+        line: line || (late ? 'You can still check in until ' + s.lateUntilText + '. It will be marked late.'
+          : 'Tap Check in when you’re at the venue.'),
+        meta: line && s ? windowText(s) : sessionMeta(), // the line already names the starter
         hint: takeSaved() };
-      view.actions = withSettings([{ label: 'Check in', primary: true, onClick: checkIn }], function () {
+      view.actions = withNewStart(withSettings([{ label: late ? 'Check in late' : 'Check in', primary: true, onClick: checkIn }], function () {
         view.hint = ''; // "Saved" is said once
         render(view);
-      });
+      }));
       return view;
     },
     // After the stamp: the group picker (first time, or on Change), else the saved group as a pill.
     checkedIn: function (atText, closesAtText, isNew) {
       var s = status && status.activeSession;
       var asking = picking || profileNeeded();
+      var late = lastCheckin && lastCheckin.late;
       var view = { state: asking ? 'profile' : 'checked-in', stamp: atText, stampIsNew: isNew, stampCompact: asking,
-        title: 'You’re on the list', line: 'Check-in closes at ' + closesAtText + '.',
+        stampLate: late ? 'Late · ' + lastCheckin.minutesLate + ' min' : '',
+        title: late ? 'You’re on the list, marked late' : 'You’re on the list',
+        line: late ? 'You checked in ' + minutes(lastCheckin.minutesLate) + ' after the on-time check-in closed at ' + closesAtText + '.'
+          : s && s.late ? 'The on-time check-in closed at ' + closesAtText + '. Late check-ins are open until ' + s.lateUntilText + '.'
+            : 'Check-in closes at ' + closesAtText + '.',
         meta: status && status.isAdmin && s && s.startedByName ? 'Started by ' + s.startedByName : '' };
       if (justMoved) {
         view.hint = 'The check-in point is now where you’re standing.';
@@ -545,26 +588,30 @@
           view.metaPlain = true; // so only the tappable pill looks like one
         }
         var back = function () { showCheckedIn(false); };
-        view.actions = withSettings([{ label: 'Done', onClick: closeApp }], back, back);
+        view.actions = withNewStart(withSettings([{ label: 'Done', onClick: closeApp }], back, back));
         return view;
       }
       var p = me.profile;
       var hasGroups = me.groups.length > 0;
       var noName = !p || !p.fullName;
+      var noRank = !noName && !p.rank;
+      var needGroup = hasGroups && !(p && p.group);
       // Say up front that the check-in is done: the questions are extra, not a condition.
       if (!picking) {
-        view.line = !noName ? 'You’re checked in. The group list has changed, so please pick yours again.'
-          : hasGroups ? 'You’re checked in. Add your rank and name, then pick your group.'
-            : 'You’re checked in. Add your rank and name so admins know who’s who.';
+        view.line = (late ? 'You’re checked in, late. ' : 'You’re checked in. ') + (noName
+          ? (hasGroups ? 'Add your rank and name, then pick your group.' : 'Add your rank and name so admins know who’s who.')
+          : noRank ? 'Rank now has its own box: please check yours' + (needGroup ? ', then pick your group.' : '.')
+            : 'The group list has changed, so please pick yours again.');
       }
-      view.say = !hasGroups ? 'Please enter your rank and full name.'
-        : noName ? 'Enter your rank and full name, then pick your group.' : 'Which group are you in?';
+      view.say = noName || noRank
+        ? 'Enter your rank and full name' + (needGroup ? ', then pick your group.' : '.')
+        : 'Which group are you in?';
       view.body = pickerEl();
       view.actions = [];
       if (!hasGroups) {
-        view.actions.push({ label: 'Save name', primary: true, onClick: function (e) { saveProfile('', e.currentTarget); } });
-      } else if (picking && p && p.group) {
-        // Changing only the name: keep the current group.
+        view.actions.push({ label: 'Save', primary: true, onClick: function (e) { saveProfile('', e.currentTarget); } });
+      } else if (p && p.group && (picking || noRank)) {
+        // Changing only the rank or name: keep the current group.
         view.actions.push({ label: 'Save', primary: true, onClick: function (e) { saveProfile(p.group, e.currentTarget); } });
       }
       if (!profileNeeded()) view.actions.push({ label: 'Cancel', onClick: closePicker });
@@ -592,7 +639,7 @@
       } else if (res.code === 'LOW_ACCURACY' && d.accuracyM && d.maxAccuracyM) {
         line = 'Accuracy ±' + metres(d.accuracyM) + ' (needs ±' + metres(d.maxAccuracyM) + '). Move outdoors or near a window, then try again.';
         // Only when raising the limit could help: the app allows up to 500 m.
-        if (admin && canChangeSettings() && d.accuracyM <= SETTINGS[2].max) line += ' If everyone here gets this, raise the accuracy limit in Check-in settings.';
+        if (admin && canChangeSettings() && d.accuracyM <= settingFor('maxAccuracyM').max) line += ' If everyone here gets this, raise the accuracy limit in Check-in settings.';
       } else if (res.code === 'OUT_OF_RANGE' && admin && d.distanceM) {
         // An admin may just not have arrived yet, so Try again stays first; but if the check-in was
         // started in the wrong place, its admin can move it from here (another admin is told whom to ask).
@@ -733,11 +780,13 @@
       var s = status.activeSession;
       if (!s) return render(status.isAdmin ? views.adminIdle() : views.noSession());
       if (status.myCheckin) {
-        rememberCheckin({ atText: status.myCheckin.atText, closesAtText: s.closesAtText, groups: status.groups, profile: status.profile });
+        rememberCheckin({ atText: status.myCheckin.atText, closesAtText: s.closesAtText, late: status.myCheckin.late,
+          minutesLate: status.myCheckin.minutesLate, groups: status.groups, profile: status.profile });
         return render(views.checkedIn(status.myCheckin.atText, s.closesAtText, false));
       }
-      // The group tap should be the only tap: try straight away.
-      if (autoCheckIn) return checkInWith(early);
+      // The group tap should be the only tap: try straight away. Not for an admin once on time is over:
+      // they may be here to start the next check-in, not to be marked late for this one.
+      if (autoCheckIn && !(status.isAdmin && s.late)) return checkInWith(early);
       render(views.ready(readyLine));
     });
   }
@@ -746,8 +795,13 @@
     if (working || confirming) return; // a double tap must not stack a second confirmation
     confirming = true;
     var mins = (status && status.sessionMinutes) || 60;
-    confirmDialog('Start a ' + mins + '-minute check-in here? Members will need to be within ' + radiusText() +
-      ' of where you’re standing. It can’t be ended early.').then(function (ok) {
+    var lateMins = (status && status.lateMinutes) || 0;
+    var s = status && status.activeSession;
+    var ending = s && s.late ? 'This ends late check-ins for ' + (s.startedByName || 'the current check-in').slice(0, 40) +
+      (s.startedByName ? '’s check-in. ' : '. ') : '';
+    confirmDialog(ending + 'Start a ' + mins + '-minute check-in here? Members will need to be within ' + radiusText() +
+      ' of where you’re standing' + (lateMins ? ', then can check in late for ' + lateMins + ' more minutes' : '') +
+      '. It can’t be ended early.').then(function (ok) {
       confirming = false;
       if (!ok || working) return;
       startHere();
@@ -909,8 +963,8 @@
     return api('checkin', { location: sendable(fix) }).then(function (res) {
       if (res.code === 'CHECKED_IN' || res.code === 'ALREADY_CHECKED_IN') {
         working = false;
-        haptic('success');
-        status.myCheckin = { at: res.data.at, atText: res.data.atText };
+        haptic(res.data.late ? 'warning' : 'success');
+        status.myCheckin = { at: res.data.at, atText: res.data.atText, late: res.data.late, minutesLate: res.data.minutesLate };
         rememberCheckin(res.data);
         return showCheckedIn(true);
       }
@@ -933,7 +987,8 @@
           var d = st.ok && st.data;
           if (d && d.myCheckin && d.activeSession) {
             status = d;
-            rememberCheckin({ atText: d.myCheckin.atText, closesAtText: d.activeSession.closesAtText, groups: d.groups, profile: d.profile });
+            rememberCheckin({ atText: d.myCheckin.atText, closesAtText: d.activeSession.closesAtText, late: d.myCheckin.late,
+              minutesLate: d.myCheckin.minutesLate, groups: d.groups, profile: d.profile });
             haptic('success');
             return showCheckedIn(true);
           }
@@ -958,8 +1013,28 @@
 
   // ---------- group, rank and full name ----------
 
+  // Singapore Armed Forces ranks (as in RANK_WORDS_ in NominalRoll.gs). A saved name from before rank
+  // had its own box, like "CPL Tan Wei Ming", is split into the two boxes when they're asked again.
+  var RANKS = ['rec', 'pte', 'pfc', 'lcp', 'cpl', 'cfc', '3sg', '2sg', '1sg', 'ssg', 'msg', '3wo', '2wo', '1wo',
+    'mwo', 'swo', 'cwo', 'oct', '2lt', 'lta', 'cpt', 'maj', 'ltc', 'sltc', 'col', 'bg', 'mg', 'lg',
+    'me1', 'me2', 'me3', 'me4', 'me5', 'me6', 'me7', 'me8', 'dxo'];
+
+  function splitRank(p) {
+    if (!p) return { rank: '', name: '' };
+    if (p.rank) return { rank: p.rank, name: p.fullName || '' };
+    var words = String(p.fullName || '').trim().split(/\s+/);
+    if (words.length > 1 && RANKS.indexOf(words[0].toLowerCase()) !== -1) {
+      return { rank: words[0].toUpperCase(), name: words.slice(1).join(' ') };
+    }
+    return { rank: '', name: p.fullName || '' };
+  }
+
+  function displayName(p) {
+    return [p.rank, p.fullName].filter(Boolean).join(' ');
+  }
+
   function rememberCheckin(data) {
-    lastCheckin = { atText: data.atText, closesAtText: data.closesAtText };
+    lastCheckin = { atText: data.atText, closesAtText: data.closesAtText, late: !!data.late, minutesLate: data.minutesLate || 0 };
     // A server without groups support sends no list; then nothing is asked.
     if (Array.isArray(data.groups)) me = { groups: data.groups, profile: data.profile || null };
   }
@@ -971,14 +1046,16 @@
   function profileNeeded() {
     if (!me) return false;
     var p = me.profile;
-    return !p || !p.fullName || (me.groups.length > 0 && !p.group);
+    return !p || !p.fullName || !p.rank || (me.groups.length > 0 && !p.group);
   }
 
   function closePicker() {
     picking = false;
     pickerError = '';
     nameInvalid = false;
+    rankInvalid = false;
     draftName = null;
+    draftRank = null;
     showCheckedIn(false);
     focusFirst('.tag');
   }
@@ -990,7 +1067,7 @@
 
   function profileTag() {
     var p = me.profile;
-    var now = [p.group, p.fullName].filter(Boolean);
+    var now = [p.group, displayName(p)].filter(Boolean);
     var b = el('button', 'tag');
     b.type = 'button';
     b.setAttribute('aria-label', 'Change group or name (now ' + now.join(', ') + ')');
@@ -1000,7 +1077,7 @@
       picking = true;
       showCheckedIn(false);
       // Most changes are a group: land on the question, not the name field, so no keyboard pops up.
-      focusFirst(me.groups.length ? '#group-q' : '#full-name');
+      focusFirst(me.groups.length ? '#group-q' : '#rank');
     });
     return b;
   }
@@ -1008,38 +1085,26 @@
   function pickerEl() {
     var p = me.profile;
     var box = el('div', 'picker');
-    var firstTime = !p || !p.fullName;
-    if (firstTime || picking) {
-      var field = el('div', 'field');
-      var label = el('label', 'picker-q', 'Rank and full name');
-      label.htmlFor = 'full-name';
-      var input = el('input', 'input');
-      input.id = 'full-name';
-      input.type = 'text';
-      input.autocomplete = 'off'; // a suggested contact name would leave out the rank
-      input.autocapitalize = 'words';
-      input.placeholder = 'e.g. CPL Tan Wei Ming';
-      input.spellcheck = false;
-      input.maxLength = 60;
-      input.setAttribute('enterkeyhint', 'done');
-      // Not prefilled from Telegram: display names are often nicknames, and never carry a rank.
-      input.value = draftName !== null ? draftName : (p && p.fullName) || '';
-      if (nameInvalid) {
-        input.setAttribute('aria-invalid', 'true');
-        input.setAttribute('aria-describedby', 'name-error');
+    var split = splitRank(p);
+    if (!p || !p.fullName || !p.rank || picking) {
+      var row = el('div', 'name-row');
+      row.appendChild(textField({ id: 'rank', cls: 'field-rank', label: 'Rank', max: 12, caps: 'characters',
+        placeholder: 'e.g. CPL', value: draftRank !== null ? draftRank : split.rank, invalid: rankInvalid,
+        onInput: function (v) { draftRank = v; } }));
+      row.appendChild(textField({ id: 'full-name', cls: 'field-name', label: 'Full name', max: 60, caps: 'words',
+        placeholder: 'e.g. Tan Wei Ming', value: draftName !== null ? draftName : split.name, invalid: nameInvalid,
+        help: 'full-name-help', onInput: function (v) { draftName = v; } }));
+      box.appendChild(row);
+      // One line for both boxes, full width (the rank box is too narrow to hold a message).
+      if (rankInvalid || nameInvalid) {
+        var err = el('p', 'field-error', rankInvalid && nameInvalid ? 'Enter your rank and full name.'
+          : rankInvalid ? 'Enter your rank.' : 'Enter your full name.');
+        err.id = 'name-row-error';
+        box.appendChild(err);
       }
-      input.addEventListener('input', function () { draftName = input.value; });
-      input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-      });
-      field.appendChild(label);
-      field.appendChild(input);
-      if (nameInvalid) {
-        var err = el('p', 'field-error', 'Enter your rank and full name first.');
-        err.id = 'name-error';
-        field.appendChild(err);
-      }
-      box.appendChild(field);
+      var help = el('p', 'field-help', 'As it appears on the nominal roll.');
+      help.id = 'full-name-help';
+      box.appendChild(help);
     }
     if (me.groups.length) {
       var q = el('p', 'picker-q', 'Which group are you in?');
@@ -1071,21 +1136,61 @@
     return box;
   }
 
+  // One labelled text box (rank or full name), with its error and help text linked for screen readers.
+  function textField(o) {
+    var field = el('div', 'field ' + o.cls);
+    var label = el('label', 'picker-q', o.label);
+    label.htmlFor = o.id;
+    var input = el('input', 'input');
+    input.id = o.id;
+    input.type = 'text';
+    input.autocomplete = 'off'; // a suggested contact name is rarely the one on the roll
+    input.autocapitalize = o.caps;
+    input.placeholder = o.placeholder;
+    input.spellcheck = false;
+    input.maxLength = o.max;
+    input.setAttribute('enterkeyhint', o.id === 'rank' ? 'next' : 'done');
+    // Not prefilled from Telegram: display names are often nicknames, and never carry a rank.
+    input.value = o.value || '';
+    var described = o.help ? [o.help] : [];
+    if (o.invalid) {
+      input.setAttribute('aria-invalid', 'true');
+      described.unshift('name-row-error');
+    }
+    if (described.length) input.setAttribute('aria-describedby', described.join(' '));
+    input.addEventListener('input', function () { o.onInput(input.value); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (o.id === 'rank') focusFirst('#full-name'); else input.blur();
+    });
+    field.appendChild(label);
+    field.appendChild(input);
+    return field;
+  }
+
   function saveProfile(group, button) {
     if (savingProfile) return;
-    var input = document.getElementById('full-name');
-    var name = (input ? input.value : (me.profile && me.profile.fullName) || '').replace(/\s+/g, ' ').trim();
-    if (!name) {
-      nameInvalid = true;
+    var nameInput = document.getElementById('full-name');
+    var rankInput = document.getElementById('rank');
+    var saved = splitRank(me.profile);
+    var name = (nameInput ? nameInput.value : saved.name).replace(/\s+/g, ' ').trim();
+    var rank = (rankInput ? rankInput.value : saved.rank).replace(/\s+/g, '').toUpperCase();
+    if (!rank || !name) {
+      rankInvalid = !rank;
+      nameInvalid = !name;
+      draftRank = rankInput ? rankInput.value : draftRank;
+      draftName = nameInput ? nameInput.value : draftName;
       pickerError = '';
       showCheckedIn(false);
-      statusEl.textContent = 'Enter your rank and full name first.';
-      focusFirst('#full-name');
+      statusEl.textContent = !rank && !name ? 'Enter your rank and full name.' : !rank ? 'Enter your rank.' : 'Enter your full name.';
+      focusFirst(!rank ? '#rank' : '#full-name');
       return;
     }
     savingProfile = true;
-    draftName = input ? input.value : null;
-    Array.prototype.forEach.call(document.querySelectorAll('.choice, #actions button, #full-name'), function (c) { c.disabled = true; });
+    draftName = nameInput ? nameInput.value : null;
+    draftRank = rankInput ? rankInput.value : null;
+    Array.prototype.forEach.call(document.querySelectorAll('.choice, #actions button, #full-name, #rank'), function (c) { c.disabled = true; });
     if (button) {
       // Keep the chosen group readable; the spinner says it's on its way.
       button.classList.add('is-saving');
@@ -1099,7 +1204,7 @@
     setTimeout(function () {
       if (savingProfile && renders === id) statusEl.textContent = 'Still saving. A slow connection can take a little while.';
     }, TIMING.slowHint);
-    api('saveProfile', { fullName: name, group: group }).then(function (res) {
+    api('saveProfile', { rank: rank, fullName: name, group: group }).then(function (res) {
       savingProfile = false;
       if (res.code === 'PROFILE_SAVED') {
         haptic('success');
@@ -1107,16 +1212,19 @@
         picking = false;
         pickerError = '';
         nameInvalid = false;
+        rankInvalid = false;
         draftName = null;
+        draftRank = null;
         showCheckedIn(false);
         var p = me.profile;
-        statusEl.textContent = 'Saved: ' + [p.group, p.fullName].filter(Boolean).join(', ') + '.';
+        statusEl.textContent = 'Saved: ' + [p.group, displayName(p)].filter(Boolean).join(', ') + '.';
         focusFirst('.tag');
         return;
       }
       haptic('error');
       if (res.code === 'INVALID_GROUP' && res.data && Array.isArray(res.data.groups)) me.groups = res.data.groups;
       nameInvalid = res.code === 'INVALID_NAME';
+      rankInvalid = res.code === 'INVALID_RANK';
       // Whatever went wrong, the check-in itself stands; say so.
       pickerError = res.code === 'NETWORK' || res.code === 'BUSY'
         ? 'Couldn’t save that. You’re still checked in; tap your group again.'
@@ -1124,7 +1232,7 @@
       picking = picking || !profileNeeded();
       showCheckedIn(false);
       statusEl.textContent = pickerError;
-      focusFirst(nameInvalid ? '#full-name' : '#picker-error');
+      focusFirst(rankInvalid ? '#rank' : nameInvalid ? '#full-name' : '#picker-error');
     });
   }
 
@@ -1133,10 +1241,16 @@
   // The same ranges the server accepts (Settings.gs); it checks them again.
   var SETTINGS = [
     { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long a check\u2011in stays open', unit: 'minutes' },
+    { name: 'lateMinutes', id: 'set-late', min: 0, max: 720, label: 'Then late check\u2011ins are accepted for', unit: 'more minutes',
+      help: 'Marked late. 0 turns late check\u2011ins off.' },
     { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be to the check\u2011in point', unit: 'm' }, // "check-in" never splits
     { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location must be accurate to within', unit: 'm',
       help: 'A higher number lets more phones through. Raise it if members indoors are told their location isn’t precise enough.' },
   ];
+
+  function settingFor(name) {
+    return SETTINGS.filter(function (f) { return f.name === name; })[0];
+  }
 
   // An older server sends no maxAccuracyM and has no settings to save. (A bad value in the Sheet
   // arrives as null: the form is then the way to fix it.)
@@ -1268,10 +1382,14 @@
     var parts = [];
     if (sent.radiusM !== undefined && !onIdle) parts.push('Members can now check in within ' + m(now.radiusM) + '.');
     if (sent.maxAccuracyM !== undefined) parts.push('Locations now need to be accurate to within ' + m(now.maxAccuracyM) + '.');
+    var s = status.activeSession;
     if (sent.sessionMinutes !== undefined && !onIdle) {
-      var s = status.activeSession;
       parts.push(s ? 'This check-in still closes at ' + s.closesAtText + '; the next one will stay open ' + keep(now.sessionMinutes + ' minutes') + '.'
         : 'Check-ins now stay open ' + keep(now.sessionMinutes + ' minutes') + '.');
+    }
+    if (sent.lateMinutes !== undefined && !onIdle) {
+      var lateNow = now.lateMinutes ? 'accept late check-ins for ' + keep(now.lateMinutes + ' minutes') : 'take no late check-ins';
+      parts.push(s ? 'The next check-in will ' + lateNow + '.' : 'Check-ins now ' + lateNow + '.');
     }
     return parts.length ? 'Saved. ' + parts.join(' ') : 'Saved.';
   }
@@ -1701,11 +1819,13 @@
     return mark;
   }
 
-  function stampEl(atText, isNew, compact) {
+  function stampEl(atText, isNew, compact, late) {
     var stamp = el('div', 'stamp' + (isNew ? ' is-new' : '') + (compact ? ' is-compact' : ''));
     stamp.setAttribute('aria-hidden', 'true'); // announced through the title
     stamp.appendChild(el('span', 'stamp-label', 'Checked in'));
     stamp.appendChild(el('span', 'stamp-time', atText));
+    // Beside the profile questions the stamp is smaller: just "Late" (the line above says how late).
+    if (late) stamp.appendChild(el('span', 'stamp-label stamp-late', compact ? 'Late' : late));
     return stamp;
   }
 
@@ -1741,7 +1861,7 @@
     current = view.state;
     document.body.setAttribute('data-state', view.state);
     clear(screenEl);
-    if (view.stamp) screenEl.appendChild(stampEl(view.stamp, view.stampIsNew, view.stampCompact));
+    if (view.stamp) screenEl.appendChild(stampEl(view.stamp, view.stampIsNew, view.stampCompact, view.stampLate));
     else if (!view.noMark) screenEl.appendChild(markEl(view));
     if (view.outcome) {
       var outcome = el('p', 'outcome' + (view.outcomeUnknown ? ' is-unknown' : ''), view.outcome);

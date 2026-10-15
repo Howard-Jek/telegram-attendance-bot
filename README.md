@@ -44,9 +44,12 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 
 1. Type `/checkin` in the group, or tap the latest 📍 Check in button.
 2. Wait for the stamp that shows "You're on the list" and the time.
-3. The first time, type your rank and full name (e.g. "CPL Tan Wei Ming") and tap your group.
-   It's remembered. Tap the pill under the stamp to change either. Names saved before the app
-   asked for a rank stay as they were: tap the pill to add it, or correct it on the Members tab.
+3. The first time, type your rank (e.g. "CPL") and your full name as it is on the nominal roll
+   (e.g. "Tan Wei Ming"), and tap your group. It's remembered. Tap the pill under the stamp to
+   change any of them. Anyone who saved "CPL Tan Wei Ming" in one box before rank had its own is
+   asked once more, with the two boxes already filled in.
+4. **Late?** After the on-time window, check-ins are still accepted for the late window (60
+   minutes unless an admin changed it). You're on the list, marked late, with how many minutes.
 
 **Admins** are the group's Telegram admins, plus anyone listed in `ADMIN_IDS`.
 
@@ -55,11 +58,15 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 3. The bot posts "📍 Check-in is open until HH:mm" in the group, with the button.
 4. If you started in the wrong place, open the app at the venue. When it says you're too far,
    tap **Move check-in point here**.
-5. When the session ends, the bot edits its message into the result, for example
-   "Check-in closed at 11:02 · 23 checked in", followed by a line of counts per group.
-   This happens within 5 minutes of closing.
+5. When the on-time window ends, the bot edits its message to "⏰ On-time check-in closed at
+   08:30. Still on the way? Tap the button by 09:30 to check in late." The button stays.
+6. When the late window ends, the message becomes the result, for example "Check-in closed at
+   09:30 · 27 checked in (4 late)", with a line of counts per group. Each of these happens within
+   5 minutes.
+7. During another check-in's late window, any admin can **Start a new check-in**. That ends the
+   late window there and then; anyone arriving afterwards checks in to the new one.
 
-**Settings.** Admins can change three settings in the app with **Check-in settings**. The button
+**Settings.** Admins can change four settings in the app with **Check-in settings**. The button
 is on the start screen, the "Check-in is open" screen, the checked-in screen, and the "too far" and
 "not precise enough" screens, where a wrong limit is most likely to show.
 
@@ -70,6 +77,8 @@ change them in the Config tab (and the check-in point on the Sessions tab), for 
 started one in the wrong place and left.
 
 - **How long check-in stays open**, 1–720 minutes. This applies from the next session.
+- **How long late check-ins are accepted after that**, 0–720 minutes (0 turns them off). This
+  also applies from the next session.
 - **How close members must be**, 10–5000 m. This applies straight away, including to a
   session that's already open.
 - **How accurate a location must be**, 10–500 m. This also applies straight away. A higher
@@ -91,7 +100,7 @@ edit them there.
 **Rules**
 
 - Only one session can be open at a time, and it can't be ended early.
-- Each person is recorded once per session.
+- Each person is recorded once per session, on time or late.
 - A check-in needs a precise enough GPS fix, within 150 m of the check-in point.
 - Only members of the connected group can check in.
 - Members who are too far away see a rounded distance ("about 200 m", "more than 1 km"), never
@@ -104,11 +113,19 @@ edit them there.
 |---|---|---|
 | **Config** | Settings (see below) | You. The bot fills in `GROUP_CHAT_ID`. |
 | **Sessions** | One row per session: who started it, times, GPS accuracy of the check-in point, number checked in (updated every 5 minutes, final at close) | The bot |
-| **Log** | One row per check-in: time, Telegram name, GPS accuracy, distance from the check-in point, rank and full name (`full_name`), group | The bot |
+| **Log** | One row per check-in: time, Telegram name, GPS accuracy, distance from the check-in point, full name, group, rank, and `minutes_late` (blank when on time) | The bot |
 | **Rejected** | Check-in attempts that were refused while a session was open, and why | The bot |
-| **One tab per check-in**, e.g. "19 Oct 2026 0830" | Who checked in: group, rank and full name, time, Telegram name and username, grouped in your Groups tab's order, with a count per group at the top. Updated every 5 minutes while the check-in is open, and a final time when it closes. The newest is the first tab. | The bot |
+| **One tab per check-in**, e.g. "19 Oct 2026 0830" | Who checked in: group, rank, full name, time, how late, Telegram name and username, and whether the name is on the Nominal Roll; grouped in your Groups tab's order, with counts at the top. Updated every 5 minutes while the check-in is open, and a final time when it closes. The newest is the first tab. | The bot |
+| **Nominal Roll** (optional) | Your list of everyone whose attendance is taken. Any columns you like, as long as one is headed **Name** (or **Full name**). The bot colours each row by the latest check-in: **green** on time, **yellow** late, **red** not checked in once the on-time window has closed (no colour before that). It adds one column on the right, "Latest check-in: …", saying the same in words. | You; the bot only colours rows and fills its own column |
 | **Groups** | Your groups, one per row under the `group` header. Leave it empty to skip the group question. | You |
-| **Members** | Each member's saved rank and full name, and group | The bot. You can correct names and groups here. |
+| **Members** | Each member's saved full name, group and rank | The bot. You can correct names, ranks and groups here. |
+
+**Matching names to the Nominal Roll.** A member's full name matches a roll row when the same
+words appear, ignoring capitals, punctuation, extra spaces and word order, and a rank typed in front
+of the name. So "Marcus Chen Feng" matches "CHEN FENG, MARCUS", but "Tan Wei Meng" doesn't match
+"Tan Wei Ming". On a check-in's tab, **On nominal roll: No** shows who checked in under a name the
+roll doesn't have; correct the name on the Members tab (or on the roll) and the next update picks it
+up.
 
 **No exact locations are kept.** A phone's coordinates are used to measure how far it is from
 the check-in point, then dropped. The check-in point itself (where the admin stood) is kept out
@@ -157,6 +174,7 @@ fast:
 | `RADIUS_M` | 150 | How close to the check-in point members must be, in metres. Admins can change it in the app. |
 | `MAX_ACCURACY_M` | 100 | The roughest GPS fix accepted, in metres. This also applies to the admin who sets the point. Admins can change it in the app. |
 | `SESSION_MINUTES` | 60 | How long a session stays open. Admins can change it in the app. |
+| `LATE_MINUTES` | 60 | How long late check-ins are accepted after that, marked late; 0 for none. Admins can change it in the app. |
 | `INITDATA_MAX_AGE_MIN` | 15 | How long an opened Mini App stays valid before members must reopen it |
 | `ADMIN_IDS` | *(blank)* | Optional. Comma-separated Telegram user IDs that may start sessions without being group admins. |
 
@@ -311,6 +329,10 @@ Log and Rejected tabs every column from G onwards moves two to the left, and on 
 column from I onwards does. Formulas you wrote elsewhere that name those columns by letter (or
 import them) need checking. Until `setup()` has run, the app says "The bot was updated".
 
+**The late check-ins and Nominal Roll update** needs `setup()` once more: it adds `late_until`
+to Sessions, `rank` and `minutes_late` to Log, `rank` to Members, and `LATE_MINUTES` to Config.
+Nothing moves. Until it has run, the app says "The bot was updated".
+
 To move the bot to another group:
 
 1. Clear `GROUP_CHAT_ID` in Config.
@@ -403,6 +425,7 @@ apps-script/       the backend (pushed with clasp)
   Checkin.gs         check-in rules and writes
   Profile.gs         groups, ranks and full names
   SessionTabs.gs     the tab listing who checked in to each check-in
+  NominalRoll.gs     colouring the Nominal Roll tab by the latest check-in
   Settings.gs        check-in settings admins change in the app
   Group.gs           the group's Check in button and the close job
   Webhook.gs         Telegram updates: /checkin, connecting the group, supergroup upgrades

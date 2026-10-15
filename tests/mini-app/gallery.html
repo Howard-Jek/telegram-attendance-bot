@@ -23,7 +23,13 @@
 <script>
   // [scenario, caption]. Each frame replays the scenario's own steps (clicks, taps, typing).
   var SHOW = [
-    ['profile-picker', 'After check-in: group + name (first time)'],
+    ['profile-picker', 'After check-in: rank, name and group (first time)'],
+    ['profile-old-name-with-rank', 'Saved before rank had its own box'],
+    ['late-checkin', 'Checked in late'],
+    ['late-checkin-profile', 'Late, first time: rank, name and group'],
+    ['late-ready', 'Admin, late window of another admin\u2019s check-in'],
+    ['admin-late-checked-in', 'Admin checked in, own check-in in its late window'],
+    ['admin-settings-late', 'Settings with the late window'],
     ['profile-first-time', 'Group saved'],
     ['profile-change-open', 'Change group or name'],
     ['profile-group-removed', 'Group no longer listed (name kept)'],

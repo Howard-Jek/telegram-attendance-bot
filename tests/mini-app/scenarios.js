@@ -15,13 +15,21 @@
   function checkedIn(groups, profile) {
     return { ok: true, code: 'CHECKED_IN', message: 'Checked in at 10:32.', data: Object.assign({ groups: groups, profile: profile }, CHECKED_IN_BASE) };
   }
-  var CHECKED_IN = checkedIn([], { fullName: 'Cy Member', group: '' });
+  var CHECKED_IN = checkedIn([], { rank: 'CPL', fullName: 'Cy Member', group: '' });
   var GROUPS = ['Alpha', 'Bravo', 'Charlie'];
-  function saved(fullName, group, groups) {
-    return { ok: true, code: 'PROFILE_SAVED', message: 'Saved.', data: { groups: groups || GROUPS, profile: { fullName: fullName, group: group } } };
+  function saved(fullName, group, groups, rank) {
+    return { ok: true, code: 'PROFILE_SAVED', message: 'Saved.', data: { groups: groups || GROUPS, profile: { rank: rank || 'CPL', fullName: fullName, group: group } } };
   }
-  function SETTINGS_SAVED(sessionMinutes, radiusM, maxAccuracyM) {
-    return { ok: true, code: 'SETTINGS_SAVED', message: 'Saved.', data: { sessionMinutes: sessionMinutes, radiusM: radiusM, maxAccuracyM: maxAccuracyM } };
+  function SETTINGS_SAVED(sessionMinutes, radiusM, maxAccuracyM, lateMinutes) {
+    return { ok: true, code: 'SETTINGS_SAVED', message: 'Saved.', data: { sessionMinutes: sessionMinutes, radiusM: radiusM, maxAccuracyM: maxAccuracyM,
+      lateMinutes: lateMinutes || 0 } };
+  }
+  // The same session after its on-time window (11:30), taking late check-ins until 12:30.
+  var LATE = { late: true, lateUntil: '2026-09-21T04:30:15.000Z', lateUntilText: '12:30' };
+  function lateCheckedIn(minutesLate, profile) {
+    var r = checkedIn(GROUPS, profile === undefined ? { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } : profile);
+    r.data = Object.assign({}, r.data, { late: true, minutesLate: minutesLate, atText: '11:42', lateUntilText: '12:30' });
+    return r;
   }
   var START_CONFIRM = 'Start a 60-minute check-in here? Members will need to be within 150 m of where you’re standing. It can’t be ended early.';
   var FRESH = { latitude: 1.2834, longitude: 103.8607, accuracy: 8 }; // the browser's fresh fix on Android
@@ -110,7 +118,7 @@
     // Another admin's check-in: no settings or Move for this admin, and they're told whom to ask.
     'admin-other-checked-in-no-settings': {
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({ startedByMe: false }, SESSION),
-        myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { fullName: 'LTA Bo Admin', group: '' } })] },
+        myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { rank: 'LTA', fullName: 'Bo Admin', group: '' } })] },
       expect: { state: 'checked-in', buttons: ['Done'], text: ['Started by Ada Admin'] } },
     'admin-other-too-far': { location: { lm: GPS },
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({ startedByMe: false }, SESSION) })],
@@ -122,7 +130,7 @@
       expect: { state: 'failed', notText: ['raise the accuracy limit'], buttons: ['Try again'] } },
     'admin-own-checkin-settings': {
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({ startedByMe: true }, SESSION),
-        myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { fullName: 'LTA Ada Admin', group: '' } })] },
+        myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { rank: 'LTA', fullName: 'Ada Admin', group: '' } })] },
       expect: { state: 'checked-in', buttons: ['Done', 'Check-in settings'] } },
     // The form was opened before another admin started: the server refuses, and Cancel reloads.
     'admin-settings-locked': { api: { status: [status({ isAdmin: true }), status({ isAdmin: true, activeSession: Object.assign({ startedByMe: false }, SESSION) })],
@@ -168,7 +176,7 @@
       expect: { state: 'ready', notText: ['Saved.'], calls: ['status', 'checkin', 'saveSettings', 'status'] } },
     'admin-settings-minutes-during-session': {
       api: { status: [status({ isAdmin: true, activeSession: SESSION, myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' },
-        groups: [], profile: { fullName: 'LTA Ada Admin', group: '' } })], saveSettings: [SETTINGS_SAVED(90, 150, 100)] },
+        groups: [], profile: { rank: 'LTA', fullName: 'Ada Admin', group: '' } })], saveSettings: [SETTINGS_SAVED(90, 150, 100)] },
       steps: [{ waitState: 'checked-in' }, { click: 'Check-in settings' }, { waitState: 'settings' }, { fill: ['#set-minutes', '90'] }, { click: 'Save' }],
       expect: { state: 'checked-in', text: ['Saved. This check-in still closes at 11:30; the next one will stay open 90\u00a0minutes.', 'Check-in closes at 11:30.'],
         sentSettings: { sessionMinutes: 90 } } },
@@ -219,15 +227,15 @@
       expect: { state: 'settings', inputValues: { 'set-minutes': '60' }, notText: ['Saved:'], calls: ['status'] } },
     'admin-checked-in-settings': {
       api: { status: [status({ isAdmin: true, activeSession: SESSION, myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' },
-        groups: [], profile: { fullName: 'LTA Ada Admin', group: '' } })], saveSettings: [SETTINGS_SAVED(60, 300, 100)] },
+        groups: [], profile: { rank: 'LTA', fullName: 'Ada Admin', group: '' } })], saveSettings: [SETTINGS_SAVED(60, 300, 100)] },
       steps: [{ waitState: 'checked-in' }, { click: 'Check-in settings' },
-        { waitState: 'settings', text: ['Distance and accuracy apply straight away.', 'The time applies from the next check-in.'] },
+        { waitState: 'settings', text: ['Distance and accuracy apply straight away.', 'The times apply from the next check-in.'] },
         { fill: ['#set-radius', '300'] }, { click: 'Save' }],
       expect: { state: 'checked-in', text: ['10:31', 'Saved. Members can now check in within 300\u00a0m.'], notText: ['stay open'],
         buttons: ['Done', 'Check-in settings'], sentSettings: { radiusM: 300 } } },
     'admin-settings-during-session': {
       api: { status: [status({ isAdmin: true, activeSession: SESSION, myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' },
-        groups: ['Alpha', 'Bravo'], profile: { fullName: 'LTA Ada Admin', group: 'Alpha' } })] },
+        groups: ['Alpha', 'Bravo'], profile: { rank: 'LTA', fullName: 'Ada Admin', group: 'Alpha' } })] },
       steps: [{ waitState: 'checked-in', text: ['Alpha · LTA Ada Admin'] }, { click: 'Check-in settings' }],
       expect: { state: 'settings', text: ['apply straight away'], buttons: ['Save', 'Cancel'] } },
     'admin-settings-large-text': { fontScale: 1.3, api: { status: [status({ isAdmin: true })] },
@@ -537,66 +545,79 @@
 
     // ---------- group, rank and full name ----------
     'profile-first-time': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)], saveProfile: [saved('CPL Cy Member', 'Bravo')] },
-      steps: [{ waitState: 'profile', text: ['You’re on the list', 'Add your rank and name, then pick your group.', 'Which group are you in?', 'Rank and full name'] },
-        { fill: ['#full-name', 'CPL Cy Member'] }, { tap: 'Bravo' }],
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)], saveProfile: [saved('Cy Member', 'Bravo')] },
+      steps: [{ waitState: 'profile', text: ['You’re on the list', 'Add your rank and name, then pick your group.', 'Which group are you in?', 'Rank', 'Full name', 'As it appears on the nominal roll'] },
+        { fill: ['#rank', 'cpl'] }, { fill: ['#full-name', 'Cy Member'] }, { tap: 'Bravo' }],
       expect: { state: 'checked-in', text: ['10:32', 'Bravo · CPL Cy Member', 'Change'], buttons: ['Done'],
-        sentProfile: { fullName: 'CPL Cy Member', group: 'Bravo' }, calls: ['status', 'checkin', 'saveProfile'] } },
+        sentProfile: { rank: 'CPL', fullName: 'Cy Member', group: 'Bravo' }, calls: ['status', 'checkin', 'saveProfile'] } },
     // Not prefilled from Telegram: a display name has no rank, and is often a nickname.
     'profile-picker': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)] },
-      expect: { state: 'profile', choices: GROUPS, inputValue: '', placeholder: 'e.g. CPL Tan Wei Ming', buttons: [] } },
+      expect: { state: 'profile', choices: GROUPS, inputValue: '', inputValues: { rank: '' }, placeholder: 'e.g. Tan Wei Ming', buttons: [] } },
     'profile-name-untouched': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)] },
       steps: [{ waitState: 'profile' }, { tap: 'Alpha' }],
-      expect: { state: 'profile', text: ['Enter your rank and full name first.'], invalid: ['full-name'], focusId: 'full-name', focusInApp: true, calls: ['status', 'checkin'] } },
+      expect: { state: 'profile', text: ['Enter your rank and full name.'], invalid: ['rank', 'full-name'], focusId: 'rank', focusInApp: true, calls: ['status', 'checkin'] } },
+    'profile-rank-missing': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)] },
+      steps: [{ waitState: 'profile' }, { fill: ['#full-name', 'Cy Tan'] }, { tap: 'Alpha' }],
+      expect: { state: 'profile', text: ['Enter your rank.'], notText: ['Enter your full name.'], invalid: ['rank'], inputValue: 'Cy Tan', calls: ['status', 'checkin'] } },
     'profile-typed-name': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)], saveProfile: [saved('Cy Tan', 'Alpha')] },
-      steps: [{ waitState: 'profile' }, { fill: ['#full-name', '  Cy   Tan '] }, { tap: 'Alpha' }],
-      expect: { state: 'checked-in', text: ['Alpha · Cy Tan'], sentProfile: { fullName: 'Cy Tan', group: 'Alpha' } } },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)], saveProfile: [saved('Cy Tan', 'Alpha', null, '3SG')] },
+      steps: [{ waitState: 'profile' }, { fill: ['#rank', ' 3sg '] }, { fill: ['#full-name', '  Cy   Tan '] }, { tap: 'Alpha' }],
+      expect: { state: 'checked-in', text: ['Alpha · 3SG Cy Tan'], sentProfile: { rank: '3SG', fullName: 'Cy Tan', group: 'Alpha' } } },
     'profile-empty-name': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)] },
-      steps: [{ waitState: 'profile' }, { fill: ['#full-name', '   '] }, { tap: 'Alpha' }],
-      expect: { state: 'profile', text: ['Enter your rank and full name first.'], calls: ['status', 'checkin'] } },
-    'profile-returning': { location: { lm: GPS },
+      steps: [{ waitState: 'profile' }, { fill: ['#rank', 'CPL'] }, { fill: ['#full-name', '   '] }, { tap: 'Alpha' }],
+      expect: { state: 'profile', text: ['Enter your full name.'], invalid: ['full-name'], calls: ['status', 'checkin'] } },
+    // Saved before rank had its own box: asked once more, with the boxes filled in from the old name.
+    'profile-old-name-with-rank': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'CPL Cy Tan', group: 'Bravo' })],
+        saveProfile: [saved('Cy Tan', 'Bravo')] },
+      steps: [{ waitState: 'profile', text: ['Rank now has its own box: please check yours.'] }, { click: 'Save' }],
+      expect: { state: 'checked-in', text: ['Bravo · CPL Cy Tan'], sentProfile: { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } } },
+    'profile-old-name-no-rank': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'Cy Tan', group: 'Bravo' })] },
-      expect: { state: 'checked-in', text: ['Bravo · Cy Tan', 'Change'], buttons: ['Done'], calls: ['status', 'checkin'] } },
+      expect: { state: 'profile', inputValue: 'Cy Tan', inputValues: { rank: '' }, buttons: ['Save'], choices: GROUPS } },
+    'profile-returning': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' })] },
+      expect: { state: 'checked-in', text: ['Bravo · CPL Cy Tan', 'Change'], buttons: ['Done'], calls: ['status', 'checkin'] } },
     'profile-change': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'Cy Tan', group: 'Bravo' })],
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' })],
         saveProfile: [saved('Cy Tan', 'Charlie')] },
       steps: [{ waitState: 'checked-in' }, { tap: 'Change' }, { waitState: 'profile', text: ['Which group are you in?'] }, { tap: 'Charlie' }],
-      expect: { state: 'checked-in', text: ['Charlie · Cy Tan'], sentProfile: { fullName: 'Cy Tan', group: 'Charlie' } } },
+      expect: { state: 'checked-in', text: ['Charlie · CPL Cy Tan'], sentProfile: { rank: 'CPL', fullName: 'Cy Tan', group: 'Charlie' } } },
     'profile-change-open': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'Cy Tan', group: 'Bravo' })] },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' })] },
       steps: [{ waitState: 'checked-in' }, { tap: 'Change' }],
-      expect: { state: 'profile', buttons: ['Save', 'Cancel'], inputValue: 'Cy Tan', notText: ['One quick question'] } },
+      expect: { state: 'profile', buttons: ['Save', 'Cancel'], inputValue: 'Cy Tan', inputValues: { rank: 'CPL' }, notText: ['One quick question'] } },
     'profile-change-save-name': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'Cy Tan', group: 'Bravo' })],
-        saveProfile: [saved('Cy Tan-Lim', 'Bravo')] },
-      steps: [{ waitState: 'checked-in' }, { tap: 'Change' }, { waitState: 'profile' }, { fill: ['#full-name', 'Cy Tan-Lim'] }, { click: 'Save' }],
-      expect: { state: 'checked-in', text: ['Bravo · Cy Tan-Lim'], sentProfile: { fullName: 'Cy Tan-Lim', group: 'Bravo' } } },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' })],
+        saveProfile: [saved('Cy Tan-Lim', 'Bravo', null, '3SG')] },
+      steps: [{ waitState: 'checked-in' }, { tap: 'Change' }, { waitState: 'profile' }, { fill: ['#rank', '3SG'] }, { fill: ['#full-name', 'Cy Tan-Lim'] }, { click: 'Save' }],
+      expect: { state: 'checked-in', text: ['Bravo · 3SG Cy Tan-Lim'], sentProfile: { rank: '3SG', fullName: 'Cy Tan-Lim', group: 'Bravo' } } },
     'profile-large-text': { fontScale: 1.3, location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)] },
       expect: { state: 'profile', stampFits: true } },
     'profile-change-cancel': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'Cy Tan', group: 'Bravo' })] },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' })] },
       steps: [{ waitState: 'checked-in' }, { tap: 'Change' }, { waitState: 'profile' }, { click: 'Cancel' }],
-      expect: { state: 'checked-in', text: ['Bravo · Cy Tan'], calls: ['status', 'checkin'] } },
+      expect: { state: 'checked-in', text: ['Bravo · CPL Cy Tan'], calls: ['status', 'checkin'] } },
     'profile-no-groups': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn([], null)], saveProfile: [saved('CPL Cy Member', '', [])] },
-      steps: [{ waitState: 'profile', text: ['Rank and full name'], notText: ['Which group'] }, { fill: ['#full-name', 'CPL Cy Member'] }, { click: 'Save name' }],
-      expect: { state: 'checked-in', text: ['CPL Cy Member', 'Change'], sentProfile: { fullName: 'CPL Cy Member', group: '' } } },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn([], null)], saveProfile: [saved('Cy Member', '', [])] },
+      steps: [{ waitState: 'profile', text: ['Rank', 'Full name'], notText: ['Which group'] }, { fill: ['#rank', 'CPL'] }, { fill: ['#full-name', 'Cy Member'] }, { click: 'Save' }],
+      expect: { state: 'checked-in', text: ['CPL Cy Member', 'Change'], sentProfile: { rank: 'CPL', fullName: 'Cy Member', group: '' } } },
     'profile-group-removed': { location: { lm: GPS },
-      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'Cy Tan', group: '' })] },
-      expect: { state: 'profile', choices: GROUPS, inputValue: null, text: ['group list has changed'], notText: ['Rank and full name'], buttons: [] } },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { rank: 'CPL', fullName: 'Cy Tan', group: '' })] },
+      expect: { state: 'profile', choices: GROUPS, inputValue: null, text: ['group list has changed'], notText: ['Full name'], buttons: [] } },
     'profile-save-network-error': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)], saveProfile: [{ network: true }] },
-      steps: [{ waitState: 'profile' }, { fill: ['#full-name', 'Cy Tan'] }, { tap: 'Alpha' }],
-      expect: { state: 'profile', text: ['10:32', 'You’re still checked in'], inputValue: 'Cy Tan', calls: ['status', 'checkin', 'saveProfile', 'saveProfile', 'saveProfile'] } },
+      steps: [{ waitState: 'profile' }, { fill: ['#rank', 'CPL'] }, { fill: ['#full-name', 'Cy Tan'] }, { tap: 'Alpha' }],
+      expect: { state: 'profile', text: ['10:32', 'You’re still checked in'], inputValue: 'Cy Tan', inputValues: { rank: 'CPL' }, calls: ['status', 'checkin', 'saveProfile', 'saveProfile', 'saveProfile'] } },
     'profile-invalid-group': { location: { lm: GPS },
       api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, null)],
         saveProfile: [{ ok: false, code: 'INVALID_GROUP', message: 'That group isn’t on the list any more. Please pick one again.', data: { groups: ['Alpha', 'Delta'] } }] },
-      steps: [{ waitState: 'profile' }, { fill: ['#full-name', 'CPL Cy Tan'] }, { tap: 'Bravo' }],
+      steps: [{ waitState: 'profile' }, { fill: ['#rank', 'CPL'] }, { fill: ['#full-name', 'Cy Tan'] }, { tap: 'Bravo' }],
       expect: { state: 'profile', choices: ['Alpha', 'Delta'], text: ['isn’t on the list any more'] } },
     'profile-on-reopen': {
       api: { status: [status({ activeSession: MEMBER_SESSION, myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: GROUPS, profile: null })] },
@@ -608,6 +629,68 @@
       api: { status: [status({ isAdmin: true, activeSession: SESSION })], checkin: [checkedIn(['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot',
         'Youth ministry (Saturday evening)', 'Worship team', 'Ushers & welcome', '10', 'Hospitality and refreshments crew', 'Tech'], null)] },
       expect: { state: 'profile', text: ['Started by Ada Admin'] } },
+
+    // ---------- late check-ins ----------
+    // An admin isn't checked in on opening once on time is over: they may be here to start the next one.
+    'late-ready': {
+      api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })] },
+      expect: { state: 'ready-late', text: ['On-time check-in has closed', 'You can still check in until 12:30. It will be marked late.',
+        'On time until 11:30 · late until 12:30 · started by Bo Admin'], buttons: ['Check in late', 'Start a new check-in'], calls: ['status'] } },
+    'late-checkin': { location: { lm: GPS }, startParam: 'open',
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(12)] },
+      expect: { state: 'checked-in', text: ['You’re on the list, marked late', 'You checked in 12 minutes after the on-time check-in closed at 11:30.',
+        'Late · 12 min', '11:42', 'Bravo · CPL Cy Tan'], buttons: ['Done'] } },
+    'late-checkin-one-minute': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(1)] },
+      expect: { state: 'checked-in', text: ['1 minute after', 'Late · 1 min'], calls: ['status', 'checkin'] } },
+    'late-admin-checks-in': { location: { lm: GPS },
+      api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })],
+        checkin: [lateCheckedIn(3)] },
+      steps: [{ click: 'Check in late' }],
+      expect: { state: 'checked-in', text: ['marked late', 'Late · 3 min'], buttons: ['Done', 'Start a new check-in'] } },
+    'late-checkin-profile': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(12, null)] },
+      expect: { state: 'profile', text: ['You’re checked in, late. Add your rank and name, then pick your group.'], notText: ['Late · 12 min'] } },
+    'late-reopen': {
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE),
+        myCheckin: { at: '2026-09-21T03:42:00.000Z', atText: '11:42', late: true, minutesLate: 12 },
+        groups: GROUPS, profile: { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } })] },
+      expect: { state: 'checked-in', text: ['marked late', 'Late · 12 min'], calls: ['status'] } },
+    'late-stamp-large-text': { fontScale: 1.3, location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(125)] },
+      expect: { state: 'checked-in', stampFits: true, text: ['Late · 125 min'] } },
+    'late-stamp-compact-large-text': { fontScale: 1.3, location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(125, null)] },
+      expect: { state: 'profile', stampFits: true, text: ['You’re checked in, late.'], notText: ['125 min'] } },
+    // Another admin's check-in is in its late window: any admin can start the next one, which ends it.
+    'admin-late-start-new': { confirm: true, location: { lm: GPS },
+      api: { status: [status({ isAdmin: true, sessionMinutes: 30, lateMinutes: 60,
+        activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })],
+        startSession: [{ ok: true, code: 'SESSION_STARTED', message: 'Check-in is open until 13:00.',
+          data: Object.assign({}, SESSION, { closesAtText: '13:00', lateUntilText: '14:00', startedByMe: true, endedLateOf: 'Bo Admin' }) }] },
+      steps: [{ waitState: 'ready-late', text: ['On time until 11:30 · late until 12:30 · started by Bo Admin'] }, { click: 'Start a new check-in' }],
+      expect: { state: 'admin-started', text: ['Late check-ins for Bo Admin’s check-in have ended.', 'Open until 13:00, late until 14:00'],
+        confirmed: ['This ends late check-ins for Bo Admin’s check-in. Start a 30-minute check-in here? Members will need to be within 150 m of where you’re standing, then can check in late for 60 more minutes. It can’t be ended early.'] } },
+    'admin-late-checked-in': {
+      api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }),
+        myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { rank: 'LTA', fullName: 'Ada Admin', group: '' } })] },
+      expect: { state: 'checked-in', buttons: ['Done', 'Check-in settings', 'Start a new check-in'], notText: ['marked late'],
+        text: ['The on-time check-in closed at 11:30. Late check-ins are open until 12:30.'] } },
+    'admin-idle-late-window': { confirm: false,
+      api: { status: [status({ isAdmin: true, sessionMinutes: 30, lateMinutes: 60 })] },
+      steps: [{ waitState: 'admin-idle', text: ['for the next 30 minutes, then late for 60 more.'] }, { click: 'Start check-in (30 min)' }],
+      expect: { state: 'admin-idle', confirmed: ['Start a 30-minute check-in here? Members will need to be within 150 m of where you’re standing, then can check in late for 60 more minutes. It can’t be ended early.'] } },
+    'admin-settings-late': { api: { status: [status({ isAdmin: true, lateMinutes: 60 })], saveSettings: [SETTINGS_SAVED(60, 150, 100, 0)] },
+      steps: [{ click: 'Check-in settings' }, { waitState: 'settings', text: ['Then late check‑ins are accepted for', 'more minutes', '0 turns late check‑ins off.'] },
+        { fill: ['#set-late', '0'] }, { click: 'Save' }],
+      expect: { state: 'admin-idle', text: ['for the next 60 minutes.'], notText: ['then late'], sentSettings: { lateMinutes: 0 } } },
+    'admin-settings-late-during-session': {
+      api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, { startedByMe: true }),
+        myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { rank: 'LTA', fullName: 'Ada Admin', group: '' } })],
+        saveSettings: [SETTINGS_SAVED(60, 150, 100, 30)] },
+      steps: [{ waitState: 'checked-in' }, { click: 'Check-in settings' }, { waitState: 'settings', text: ['The times apply from the next check-in.'] },
+        { fill: ['#set-late', '30'] }, { click: 'Save' }],
+      expect: { state: 'checked-in', text: ['Saved. The next check-in will accept late check-ins for 30\u00a0minutes.'], sentSettings: { lateMinutes: 30 } } },
 
     // Presentation-only states for screenshots and the layout audit.
     'loading': { api: { status: [{ pending: true }] }, expect: { state: 'loading', text: ['Still working'] } },
