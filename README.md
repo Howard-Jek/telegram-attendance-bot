@@ -125,7 +125,8 @@ words appear, ignoring capitals, punctuation, extra spaces and word order, and a
 of the name. So "Marcus Chen Feng" matches "CHEN FENG, MARCUS", but "Tan Wei Meng" doesn't match
 "Tan Wei Ming". On a check-in's tab, **On nominal roll: No** shows who checked in under a name the
 roll doesn't have; correct the name on the Members tab (or on the roll) and the next update, within
-5 minutes, picks it up, while the check-in is still open or within a day of it closing.
+5 minutes, picks it up, as long as the check-in (late window included) is still open. Once it has
+closed, its tab and the roll are final: fix a past check-in on its tab or the Log by hand.
 
 On the roll, leave the Name cell empty on heading rows (e.g. "HQ PLATOON") and remarks; rows with
 no name keep their own colours. Two rows with the same name aren't coloured (a check-in can't say

@@ -212,6 +212,12 @@
         }
       }
       if (e.enabled && doc().querySelector('#app button:disabled, #app input:disabled')) errors.push('controls left disabled');
+      if (e.inView) {
+        var box = doc().getElementById(e.inView);
+        var r = box && box.getBoundingClientRect();
+        var bar = doc().getElementById('actions').getBoundingClientRect();
+        if (!r || r.top < 0 || r.bottom > bar.top) errors.push(e.inView + ' not in view (' + (r && Math.round(r.top)) + '-' + (r && Math.round(r.bottom)) + ', bar at ' + Math.round(bar.top) + ')');
+      }
       if (e.backVisible !== undefined && log.backVisible !== e.backVisible) errors.push('back button visible: ' + log.backVisible);
       if (e.closingConfirmation !== undefined && !!log.closingConfirmation !== e.closingConfirmation) errors.push('closing confirmation: ' + log.closingConfirmation);
       if (e.sentProfile) {

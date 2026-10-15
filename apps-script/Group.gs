@@ -90,7 +90,7 @@ function closeExpiredSessions_() {
     const turningLate = running.filter((s) => s.status === 'open' && s.closesAt.getTime() <= nowMs && ending.indexOf(s) === -1);
     const finals = pendingFinalTabs_(sessions, ending, nowMs); // includes the ending ones
     const live = running.filter((s) => ending.indexOf(s) === -1);
-    if (!live.length && !finals.length) return { tabs: [] };
+    if (!running.length && !finals.length) return { tabs: [] };
     // Every running session is tallied (its count is written below), and every one whose tab is written.
     const counted = running.concat(finals.filter((s) => running.indexOf(s) === -1));
     const tally = tallyLog_(counted.map((s) => s.id));

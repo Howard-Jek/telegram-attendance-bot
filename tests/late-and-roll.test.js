@@ -483,3 +483,38 @@ test('roll: reset at start happens after the check-in lock is let go', () => {
   const rollWriteAt = env.events.findIndex((e) => e.type === 'write' && e.sheet === 'Nominal Roll');
   assert.ok(rollWriteAt > unlockAt && unlockAt !== -1, JSON.stringify(env.events.map((e) => e.type + (e.sheet ? ':' + e.sheet : ''))));
 });
+
+// ---------- review fixes, round 2 ----------
+
+test('roll: a duplicate Members row for someone doesn\'t replace the one the app saves to', () => {
+  const env = lateSetup();
+  const roll = addRoll(env, [[1, 'CPL', 'TAN WEI MING', 'SIG']]);
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.saveProfile(MEMBER, 'Tan Wei Ming', '', 'CPL');
+  env.sheet('Members').appendRow(["'" + MEMBER.id, 'Old Wrong Name', '', 'Cy', 'cy', new Date(T0), 'CPL']);
+  close(env);
+  assert.equal(rollState(roll).rows[0].colour, GREEN);
+});
+
+test('roll: a row whose name the owner clears loses the bot\'s colour', () => {
+  const env = lateSetup();
+  const roll = addRoll(env, [[1, 'CPL', 'CY MEMBER', 'SIG']]);
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.saveProfile(MEMBER, 'Cy Member', '', 'CPL');
+  close(env);
+  assert.equal(rollState(roll).rows[0].colour, GREEN);
+  roll.getRange(2, 3).setValue('');
+  at(env, 5);
+  close(env);
+  assert.equal(rollState(roll).rows[0].colour, '#ffffff');
+});
+
+test('close: a session stuck for over a day is closed even when it is the only one', () => {
+  const env = lateSetup();
+  env.sheet('Sessions').appendRow(['S-20260920-0900', ADMIN.id, 'Ada Admin', new Date(T0 - 30 * 60 * MIN), new Date(T0 - 29 * 60 * MIN),
+    '', 'open', 0, 12, new Date(T0 - 28 * 60 * MIN)]);
+  close(env);
+  assert.equal(env.records('Sessions')[0].status, 'closed');
+});

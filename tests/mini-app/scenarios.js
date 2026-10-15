@@ -669,7 +669,7 @@
         startSession: [{ ok: true, code: 'SESSION_STARTED', message: 'Check-in is open until 13:00.',
           data: Object.assign({}, SESSION, { closesAtText: '13:00', lateUntilText: '14:00', startedByMe: true, endedLateOf: 'Bo Admin' }) }] },
       steps: [{ waitState: 'ready-late', text: ['On time until 11:30, late until 12:30\nStarted by Bo Admin'] }, { click: 'Start a new check-in' }],
-      expect: { state: 'admin-started', text: ['Late check-ins for Bo Admin’s check-in have ended.', 'Open until 13:00\u00a0· late until 14:00'],
+      expect: { state: 'admin-started', text: ['Late check-ins for Bo Admin’s check-in have ended.', 'Open until 13:00, late until 14:00\nWithin 150 m'],
         confirmed: ['This ends late check-ins for Bo Admin’s check-in. Start a 30-minute check-in here, then 60 minutes of late check-ins? Members will need to be within 150 m of where you’re standing. It can’t be ended early.'] } },
     'admin-late-checked-in': {
       api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }),
@@ -711,7 +711,7 @@
         moveSite: [{ ok: true, code: 'SITE_MOVED', message: 'Moved.', data: Object.assign({}, SESSION, { startedByMe: true }) }] },
       steps: [{ waitState: 'checked-in' }, { click: 'Start a new check-in' }, { waitState: 'admin-started' }, { click: 'Check in' },
         { waitState: 'failed' }, { click: 'Move check-in point here' }],
-      expect: { state: 'checked-in', text: ['12:31'], calls: ['status', 'startSession', 'checkin', 'moveSite', 'checkin'],
+      expect: { state: 'checked-in', text: ['12:31'], calls: ['status', 'startSession', 'checkin', 'moveSite', 'checkin'], notText: ['Rank', 'Which group'],
         confirmed: ['This ends late check-ins for your current check-in. Start a 30-minute check-in here, then 60 minutes of late check-ins? Members will need to be within 150 m of where you’re standing. It can’t be ended early.',
           'Move the check-in point 420 m, to where you’re standing? Members near the old spot won’t be able to check in.'] } },
     // A server from before rank had its own box sends no rank: the app doesn't ask for one.
@@ -738,7 +738,7 @@
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })],
         checkin: [{ ok: false, code: 'OUT_OF_RANGE', message: 'You are 2000 m from the check-in point.', data: { distanceM: 2000, radiusM: 150 } }] },
       steps: [{ click: 'Check in late' }],
-      expect: { state: 'failed', text: ['You’re 2 km from Bo Admin’s check-in point. To take attendance here, start a new check-in; that ends late check-ins for Bo Admin’s.'],
+      expect: { state: 'failed', text: ['You’re 2 km from Bo Admin’s check\u2011in point. To take attendance here, start a new check\u2011in. Bo Admin’s late check\u2011ins will end.'],
         buttons: ['Try again', 'Start a new check-in'] } },
     'admin-settings-minutes-in-late-window': {
       api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }),
@@ -751,6 +751,32 @@
         myCheckin: { at: '2026-09-21T02:45:00.000Z', atText: '10:45', late: false, minutesLate: 0 },
         groups: GROUPS, profile: { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } })] },
       expect: { state: 'checked-in', text: ['You checked in on time, before 11:30.'], notText: ['marked late', 'Late check-ins are open'] } },
+
+    // ---------- review fixes, round 2 ----------
+    'admin-late-new-own-ended': { confirm: true, location: { lm: GPS },
+      api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }),
+        myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { rank: 'LTA', fullName: 'Ada Admin', group: '' } })],
+        startSession: [{ ok: true, code: 'SESSION_STARTED', message: 'Check-in is open until 13:00.',
+          data: Object.assign({}, SESSION, { closesAtText: '13:00', lateUntilText: '14:00', startedByMe: true, endedLateOf: 'Ada Admin' }) }] },
+      steps: [{ waitState: 'checked-in', text: ['Started by you'] }, { click: 'Start a new check-in' }],
+      expect: { state: 'admin-started', text: ['Late check-ins for your previous check-in have ended.'], notText: ['Ada Admin’s'] } },
+    // An older server sends no rank: picking a group still saves, without asking for one.
+    'profile-older-server-group-only': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [checkedIn(GROUPS, { fullName: 'Cy Tan', group: '' })],
+        saveProfile: [{ ok: true, code: 'PROFILE_SAVED', message: 'Saved.', data: { groups: GROUPS, profile: { fullName: 'Cy Tan', group: 'Bravo' } } }] },
+      steps: [{ waitState: 'profile' }, { tap: 'Bravo' }],
+      expect: { state: 'checked-in', text: ['Bravo · Cy Tan'], sentProfile: { rank: undefined, fullName: 'Cy Tan', group: 'Bravo' } } },
+    'admin-late-own-too-far': { location: { lm: GPS },
+      api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }) })],
+        checkin: [{ ok: false, code: 'OUT_OF_RANGE', message: 'You are 420 m from the check-in point.', data: { distanceM: 420, radiusM: 150 } }] },
+      steps: [{ click: 'Check in late' }],
+      expect: { state: 'failed', buttons: ['Try again', 'Check-in settings', 'Start a new check-in'],
+        text: ['You’re 420 m from your check\u2011in point. To take attendance here, start a new check\u2011in. Late check\u2011ins for this one will end.'] } },
+    'admin-low-accuracy-opens-at-accuracy': { location: { lm: GPS },
+      api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, { startedByMe: true }) })],
+        checkin: [{ ok: false, code: 'LOW_ACCURACY', message: 'Your location is not precise enough (±130 m).', data: { accuracyM: 130, maxAccuracyM: 100 } }] },
+      steps: [{ waitState: 'failed' }, { click: 'Check-in settings' }, { pause: 100 }],
+      expect: { state: 'settings', inView: 'set-accuracy' } },
 
     // Presentation-only states for screenshots and the layout audit.
     'loading': { api: { status: [{ pending: true }] }, expect: { state: 'loading', text: ['Still working'] } },

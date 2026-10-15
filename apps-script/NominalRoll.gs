@@ -10,6 +10,7 @@
  */
 
 const ROLL_COLOURS_ = { onTime: '#d9ead3', late: '#fff2cc', absent: '#f4cccc' }; // Sheets' light green, yellow, red
+const OWN_COLOURS_ = [ROLL_COLOURS_.onTime, ROLL_COLOURS_.late, ROLL_COLOURS_.absent];
 const ROLL_STATUS_HEADER_ = 'Latest check-in';
 // Singapore Armed Forces ranks, as people type them in front of their names.
 const RANK_WORDS_ = ['rec', 'pte', 'pfc', 'lcp', 'cpl', 'cfc', '3sg', '2sg', '1sg', 'ssg', 'msg', '3wo', '2wo', '1wo',
@@ -82,7 +83,8 @@ function writeRollColours_(roll, session, people, nowMs) {
     let colour = null;
     if (!k) {
       words.push(['']);
-      colours.push(before[i].map((c) => (c === '#ffffff' ? null : c))); // plain white stays "no colour" (keeps banding)
+      // Plain white stays "no colour" (keeps banding); so do the bot's own colours, if the name was cleared.
+      colours.push(before[i].map((c) => (c === '#ffffff' || OWN_COLOURS_.indexOf(String(c).toLowerCase()) !== -1 ? null : c)));
       return;
     }
     if (roll.twice[k]) {

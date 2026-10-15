@@ -192,7 +192,7 @@
   /* Rank and full name side by side; the name drops below the rank when text is large. */
   .name-row { display: flex; flex-wrap: wrap; column-gap: var(--s3); }
   .name-row .field { margin-bottom: 0; }
-  .name-row .field-rank { flex: 0 0 6.5rem; }
+  .name-row .field-rank { flex: 0 0 calc(4.5em + 2 * var(--s4)); } /* "e.g. CPL" fits at any text size */
   .name-row .field-name { flex: 1 1 11rem; min-width: 0; }
   .name-row + .field-help { margin-top: calc(var(--s1) - var(--s3)); }
   #rank { text-transform: uppercase; }
@@ -435,6 +435,7 @@
   var onBack = null;        // what Telegram's back button does on this screen (null: hidden)
   var renderedAt = 0;
   var lastDistanceM = 0;   // the admin's distance from the point, for the Move confirmation
+  var endedMine = false;   // the check-in just started ended the late window of this admin's own
 
   // ---------- views ----------
 
@@ -443,7 +444,8 @@
     if (!s) return '';
     if (!(status.isAdmin && s.startedByName)) return windowText(s);
     // Once on time is over the window takes a line of its own, so the pill never wraps at a separator.
-    return windowText(s) + (s.late ? '\nStarted by ' : '\u00a0· started by ') + s.startedByName;
+    var who = s.startedByMe ? 'you' : s.startedByName;
+    return windowText(s) + (s.late ? '\nStarted by ' : '\u00a0· started by ') + who;
   }
 
   // "Open until 11:30", or once on time is over, "On time until 11:30 · late until 12:30".
@@ -548,11 +550,15 @@
       // The distance comes from the start reply: another admin may have changed it since this app loaded.
       if (typeof data.radiusM === 'number') status.radiusM = data.radiusM;
       if (typeof data.maxAccuracyM === 'number') status.maxAccuracyM = data.maxAccuracyM;
-      var late = data.lateUntilText && data.lateUntilText !== data.closesAtText ? '\u00a0· late until ' + data.lateUntilText : '';
+      var lateWindow = data.lateUntilText && data.lateUntilText !== data.closesAtText;
+      var ended = !data.endedLateOf ? '' : endedMine ? 'Late check-ins for your previous check-in have ended. '
+        : 'Late check-ins for ' + data.endedLateOf + '’s check-in have ended. ';
       return { state: 'admin-started', icon: 'flag', title: 'Check-in started',
-        line: (data.endedLateOf ? 'Late check-ins for ' + data.endedLateOf + '’s check-in have ended. ' : '') +
+        line: ended +
           'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
-        meta: 'Open until ' + data.closesAtText + late + '\u00a0· within ' + radiusText(), notice: data.warning, actions: actions,
+        // With a late window the pill takes two lines, so it never wraps at a separator.
+        meta: lateWindow ? 'Open until ' + data.closesAtText + ', late until ' + data.lateUntilText + '\nWithin ' + radiusText()
+          : 'Open until ' + data.closesAtText + '\u00a0· within ' + radiusText(), notice: data.warning, actions: actions,
         hint: pointFromLastKnown ? 'Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.' : '' };
     },
     ready: function (line) {
@@ -582,7 +588,7 @@
           : s && s.late ? (status.isAdmin ? 'You checked in on time. Late check-ins are open until ' + s.lateUntilText + '.'
             : 'You checked in on time, before ' + closesAtText + '.')
             : 'Check-in closes at ' + closesAtText + '.',
-        meta: status && status.isAdmin && s && s.startedByName ? 'Started by ' + s.startedByName : '' };
+        meta: status && status.isAdmin && s && s.startedByName ? 'Started by ' + (s.startedByMe ? 'you' : s.startedByName) : '' };
       if (justMoved) {
         view.hint = 'The check-in point is now where you’re standing.';
         justMoved = false;
@@ -609,9 +615,8 @@
           : noRank ? 'Please confirm your rank and full name' + (needGroup ? ', then pick your group.' : '.')
             : 'The group list has changed, so please pick yours again.');
       }
-      view.say = noName || noRank
-        ? 'Enter your rank and full name' + (needGroup ? ', then pick your group.' : '.')
-        : 'Which group are you in?';
+      // The visible line already says what to do, unless this is Change (then the questions speak for themselves).
+      view.say = (noName || noRank) && !picking ? '' : 'Which group are you in?';
       view.body = pickerEl();
       view.actions = [];
       if (!hasGroups) {
@@ -652,11 +657,14 @@
         // started in the wrong place, its admin can move it from here (another admin is told whom to ask).
         lastDistanceM = d.distanceM;
         title = 'You’re too far from the check-in point';
-        if (ownsCheckin()) {
+        if (lateWindowAdmin()) {
+          // On time is over: moving the point would only help late arrivals. Taking attendance here is a new check-in.
+          var whose = ownsCheckin() ? 'your' : starterName().slice(0, 40) + '’s';
+          line = 'You’re ' + metres(d.distanceM) + ' from ' + whose + ' check\u2011in point. To take attendance here, start a new check\u2011in. ' +
+            (ownsCheckin() ? 'Late check\u2011ins for this one will end.' : starterName().slice(0, 40) + '’s late check\u2011ins will end.');
+        } else if (ownsCheckin()) {
           line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, you can move it to where you are.';
           actions.push({ label: 'Move check-in point here', onClick: moveHere });
-        } else if (lateWindowAdmin()) {
-          line = 'You’re ' + metres(d.distanceM) + ' from ' + starterName() + '’s check-in point. To take attendance here, start a new check-in; that ends late check-ins for ' + starterName() + '’s.';
         } else {
           line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, ask ' + starterName() + ', who started this check-in, to move it.';
         }
@@ -691,7 +699,9 @@
         title: title, line: line, meta: sessionMeta(), actions: actions };
       // Too far or too rough: an admin may decide the distance or accuracy is what's wrong, or (in
       // someone's late window) be at the next venue already.
-      if (res.code === 'OUT_OF_RANGE' || res.code === 'LOW_ACCURACY') view.actions = withSettings(actions, function () { render(view); });
+      if (res.code === 'OUT_OF_RANGE' || res.code === 'LOW_ACCURACY') {
+        view.actions = withSettings(actions, function () { render(view); }, null, res.code === 'LOW_ACCURACY' ? 'set-accuracy' : 'set-radius');
+      }
       if (kind === 'checkin' && ['OUT_OF_RANGE', 'LOW_ACCURACY', 'NO_SITE'].indexOf(res.code) !== -1) view.actions = withNewStart(view.actions);
       return view;
     },
@@ -830,10 +840,16 @@
         // A slow first copy may have started it already; that copy's twin then reports "already open, by you".
         if (res.code === 'SESSION_STARTED' || (res.code === 'SESSION_ACTIVE' && res.data && res.data.startedByMe)) {
           haptic('success');
-          status.activeSession = res.data;
           // Started from the checked-in screen of the check-in this one ended: that one isn't "mine" now.
+          var was = status.activeSession;
+          endedMine = !!(was && was.startedByMe && res.data.endedLateOf);
+          status.activeSession = res.data;
           status.myCheckin = null;
           lastCheckin = null;
+          picking = false;
+          draftName = draftRank = null;
+          nameInvalid = rankInvalid = false;
+          rowError = pickerError = '';
           // data.warning explains e.g. that the group announcement could not be sent.
           return render(views.adminStarted(res.data, fix.fallback));
         }
@@ -1106,7 +1122,7 @@
     var p = me.profile;
     var box = el('div', 'picker');
     var split = splitRank(p);
-    if (!p || !p.fullName || rankMissing(p) || picking) {
+    if (!p || !p.fullName || rankMissing(p) || picking || rankInvalid || nameInvalid) {
       var row = el('div', 'name-row');
       row.appendChild(textField({ id: 'rank', cls: 'field-rank', label: 'Rank', max: 12, caps: 'characters',
         placeholder: 'e.g. CPL', value: draftRank !== null ? draftRank : split.rank, invalid: rankInvalid,
@@ -1196,7 +1212,9 @@
     var saved = splitRank(me.profile);
     var name = (nameInput ? nameInput.value : saved.name).replace(/\s+/g, ' ').trim();
     var rank = (rankInput ? rankInput.value : saved.rank).replace(/\s+/g, '').toUpperCase();
-    if (!rank || !name) {
+    // A server from before rank had its own box neither sends nor keeps one: don't ask for it then.
+    var rankKnown = !!rankInput || !me.profile || 'rank' in me.profile;
+    if ((!rank && rankKnown) || !name) {
       rankInvalid = !rank;
       nameInvalid = !name;
       rowError = '';
@@ -1225,7 +1243,7 @@
     setTimeout(function () {
       if (savingProfile && renders === id) statusEl.textContent = 'Still saving. A slow connection can take a little while.';
     }, TIMING.slowHint);
-    api('saveProfile', { rank: rank, fullName: name, group: group }).then(function (res) {
+    api('saveProfile', rankKnown ? { rank: rank, fullName: name, group: group } : { fullName: name, group: group }).then(function (res) {
       savingProfile = false;
       if (res.code === 'PROFILE_SAVED') {
         haptic('success');
@@ -1300,10 +1318,11 @@
 
   // Adds "Check-in settings" (last) to an admin's actions. cancel re-shows this screen; after a
   // save, saved (default: reload, since the numbers on this screen may be out of date).
-  function withSettings(actions, cancel, saved) {
+  // show: the id of the field to bring into view (the one this screen's problem is about).
+  function withSettings(actions, cancel, saved, show) {
     if (!canChangeSettings()) return actions;
     return actions.concat([{ label: 'Check-in settings', onClick: function () {
-      openSettings({ cancel: cancel, saved: saved || function () { loadStatus(false); } });
+      openSettings({ cancel: cancel, saved: saved || function () { loadStatus(false); } }, show);
     } }]);
   }
 
@@ -1315,7 +1334,7 @@
     return saved ? savedLine(saved.sent, saved.now, onIdle) : '';
   }
 
-  function openSettings(back) {
+  function openSettings(back, show) {
     settingsBack = back;
     settingsFrom = {};
     settingsDraft = {};
@@ -1326,9 +1345,11 @@
     settingsErrors = {};
     settingsNotice = '';
     settingsStale = false;
-    settingsNoMark = window.innerHeight < 700; // a phone this short needs the room for the fields
+    settingsNoMark = window.innerHeight < 800; // most phones: the room goes to the four fields
     render(views.settings());
     focusFirst('#screen .title'); // start at the top of the form, not on Save below it
+    var field = show && document.getElementById(show);
+    if (field) field.closest('.field').scrollIntoView({ block: 'center' }); // without focusing it: no keyboard
   }
 
   // saved: true after a save went through; otherwise Cancel (or back).

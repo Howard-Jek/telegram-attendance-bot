@@ -43,7 +43,7 @@ function handleSaveProfile_(ctx, body) {
     rank = saved && saved.rank ? saved.rank : '';
   } else {
     rank = cleanText_(body.rank, MAX_RANK_CHARS_).toUpperCase();
-    if (!rank) return reply_(false, 'INVALID_RANK', 'Please enter your rank (up to ' + MAX_RANK_CHARS_ + ' characters).');
+    if (!rank) return reply_(false, 'INVALID_RANK', 'Please enter your rank, e.g. CPL.');
   }
   const groups = readGroups_();
   let group = cleanText_(body.group, MAX_GROUP_CHARS_);
@@ -128,7 +128,7 @@ function readMembersById_() {
   const out = {};
   for (let i = 1; i < values.length; i++) {
     const id = String(values[i][MEMBER_COL_.USER_ID - 1]).trim();
-    if (!id) continue;
+    if (!id || out[id]) continue; // the first row, as findMember_ (which the app saves to) uses
     out[id] = {
       fullName: String(values[i][MEMBER_COL_.FULL_NAME - 1]).trim(),
       rank: String(values[i][MEMBER_COL_.RANK - 1]).trim(),
