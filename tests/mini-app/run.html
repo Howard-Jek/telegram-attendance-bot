@@ -44,6 +44,7 @@
     var errors = [];
     var frame = document.createElement('iframe');
     frame.src = 'harness.html?scenario=' + encodeURIComponent(name);
+    if (sc.frame) { frame.style.width = sc.frame[0] + 'px'; frame.style.height = sc.frame[1] + 'px'; } // a phone size: [width, height]
     document.body.appendChild(frame);
     var doc = function () { return frame.contentDocument; };
     var win = function () { return frame.contentWindow; };
@@ -217,6 +218,16 @@
         var r = box && box.getBoundingClientRect();
         var bar = doc().getElementById('actions').getBoundingClientRect();
         if (!r || r.top < 0 || r.bottom > bar.top) errors.push(e.inView + ' not in view (' + (r && Math.round(r.top)) + '-' + (r && Math.round(r.bottom)) + ', bar at ' + Math.round(bar.top) + ')');
+      }
+      if (e.peeks) {
+        // The field's label shows above the bar (and its fade), so it reads as "more below".
+        var field = doc().getElementById(e.peeks).closest('.field').getBoundingClientRect();
+        var barTop = doc().getElementById('actions').getBoundingClientRect().top;
+        if (!(field.top + 24 <= barTop - 32)) errors.push(e.peeks + ' does not peek out (field at ' + Math.round(field.top) + ', bar at ' + Math.round(barTop) + ')');
+      }
+      if (e.lineHidden !== undefined) {
+        var intro = doc().querySelector('#screen .line');
+        if (!intro || intro.hidden !== e.lineHidden) errors.push('line hidden: ' + (intro ? intro.hidden : 'no line'));
       }
       if (e.backVisible !== undefined && log.backVisible !== e.backVisible) errors.push('back button visible: ' + log.backVisible);
       if (e.closingConfirmation !== undefined && !!log.closingConfirmation !== e.closingConfirmation) errors.push('closing confirmation: ' + log.closingConfirmation);

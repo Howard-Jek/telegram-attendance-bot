@@ -190,10 +190,10 @@
   .picker { display: flex; flex-direction: column; gap: var(--s3); width: 100%; max-width: 26rem; margin-top: var(--s2); text-align: left; }
   .field { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s2); }
   /* Rank and full name side by side; the name drops below the rank when text is large. */
-  .name-row { display: flex; flex-wrap: wrap; column-gap: var(--s3); }
+  .name-row { display: flex; flex-wrap: wrap; gap: var(--s3); }
   .name-row .field { margin-bottom: 0; }
   .name-row .field-rank { flex: 0 0 calc(4.5em + 2 * var(--s4)); } /* "e.g. CPL" fits at any text size */
-  .name-row .field-name { flex: 1 1 11rem; min-width: 0; }
+  .name-row .field-name { flex: 1 1 9.5em; min-width: 0; }
   .name-row + .field-help { margin-top: calc(var(--s1) - var(--s3)); }
   #rank { text-transform: uppercase; }
   #rank::placeholder { text-transform: none; }
@@ -432,6 +432,7 @@
   var settingsNotice = '';
   var savingSettings = false;
   var settingsNoMark = false; // decided when the form opens, so the keyboard can't reflow it
+  var settingsShort = false; // likewise: the intro line is left out, so part of the 4th field shows above the bar
   var onBack = null;        // what Telegram's back button does on this screen (null: hidden)
   var renderedAt = 0;
   var lastDistanceM = 0;   // the admin's distance from the point, for the Move confirmation
@@ -448,13 +449,22 @@
     return windowText(s) + (s.late ? '\nStarted by ' : '\u00a0· started by ') + who;
   }
 
-  // "Open until 11:30", or once on time is over, "On time until 11:30 · late until 12:30".
+  // "Open until 11:30", or once on time is over, "On time until 11:30, late until 12:30".
   function windowText(s) {
-    return s.late ? 'On time until ' + s.closesAtText + ', late until ' + s.lateUntilText : 'Open until ' + s.closesAtText;
+    return s.late ? 'On time until ' + s.closesAtText + ', late\u00a0until ' + s.lateUntilText : 'Open until ' + s.closesAtText;
   }
 
   function minutes(n) {
     return n + (n === 1 ? ' minute' : ' minutes');
+  }
+
+  // "12 minutes", "1 hour", "2 hours 5 minutes"; short (for the stamp): "12 min", "1h", "2h 5m".
+  function duration(n, short) {
+    var h = Math.floor(n / 60);
+    var m = n % 60;
+    if (!h) return short ? n + ' min' : minutes(n);
+    if (short) return h + 'h' + (m ? ' ' + m + 'm' : '');
+    return h + (h === 1 ? ' hour' : ' hours') + (m ? ' ' + minutes(m) : '');
   }
 
   // During another check-in's late window, any admin may start the next one (which ends that window).
@@ -533,6 +543,7 @@
         line: open
           ? 'Distance and accuracy apply straight away. The times apply from the next check-in.'
           : 'These apply to every check-in, whichever admin starts it.',
+        lineHidden: settingsShort, // still read out; after saving, the next screen says what changed
         say: settingsNotice, body: settingsEl(), onBack: closeSettings,
         actions: [{ label: 'Save', primary: true, onClick: function (e) { saveSettings(e.currentTarget); } },
           { label: 'Cancel', onClick: closeSettings }] };
@@ -557,7 +568,7 @@
         line: ended +
           'The check-in point is where you’re standing. You’re not checked in yet: tap Check in to add yourself.',
         // With a late window the pill takes two lines, so it never wraps at a separator.
-        meta: lateWindow ? 'Open until ' + data.closesAtText + ', late until ' + data.lateUntilText + '\nWithin ' + radiusText()
+        meta: lateWindow ? 'Open until ' + data.closesAtText + ', late\u00a0until ' + data.lateUntilText + '\nWithin ' + radiusText()
           : 'Open until ' + data.closesAtText + '\u00a0· within ' + radiusText(), notice: data.warning, actions: actions,
         hint: pointFromLastKnown ? 'Your phone gave its last known position for the check-in point. If check-ins fail, tap Check in and move the point.' : '' };
     },
@@ -565,15 +576,15 @@
       var s = status && status.activeSession;
       var late = !!(s && s.late);
       var view = { state: late ? 'ready-late' : 'ready', icon: late ? 'clock' : 'pin',
-        title: late ? 'On-time check-in has closed' : 'Check-in is open',
+        title: late ? 'On\u2011time check\u2011in has closed' : 'Check-in is open',
         line: line || (late ? 'You can still check in until ' + s.lateUntilText + '. It will be marked late.'
           : 'Tap Check in when you’re at the venue.'),
         meta: line && s ? windowText(s) : sessionMeta(), // the line already names the starter
         hint: takeSaved() };
-      view.actions = withNewStart(withSettings([{ label: late ? 'Check in late' : 'Check in', primary: true, onClick: checkIn }], function () {
+      view.actions = withSettings(withNewStart([{ label: late ? 'Check in late' : 'Check in', primary: true, onClick: checkIn }]), function () {
         view.hint = ''; // "Saved" is said once
         render(view);
-      }));
+      });
       return view;
     },
     // After the stamp: the group picker (first time, or on Change), else the saved group as a pill.
@@ -582,13 +593,13 @@
       var asking = picking || profileNeeded();
       var late = lastCheckin && lastCheckin.late;
       var view = { state: asking ? 'profile' : 'checked-in', stamp: atText, stampIsNew: isNew, stampCompact: asking,
-        stampLate: late ? 'Late · ' + lastCheckin.minutesLate + ' min' : '',
+        stampLate: late ? 'Late · ' + duration(lastCheckin.minutesLate, true) : '',
         title: late ? 'You’re on\u00a0the\u00a0list, marked late' : 'You’re on the list',
-        line: late ? 'You checked in ' + minutes(lastCheckin.minutesLate) + ' after the on-time check-in closed at ' + closesAtText + '.'
+        line: late ? 'You checked in ' + duration(lastCheckin.minutesLate) + ' after the on-time check-in closed at ' + closesAtText + '.'
           : s && s.late ? (status.isAdmin ? 'You checked in on time. Late check-ins are open until ' + s.lateUntilText + '.'
             : 'You checked in on time, before ' + closesAtText + '.')
             : 'Check-in closes at ' + closesAtText + '.',
-        meta: status && status.isAdmin && s && s.startedByName ? 'Started by ' + (s.startedByMe ? 'you' : s.startedByName) : '' };
+        meta: !asking && status && status.isAdmin && s && s.startedByName && !s.startedByMe ? 'Started by ' + s.startedByName : '' };
       if (justMoved) {
         view.hint = 'The check-in point is now where you’re standing.';
         justMoved = false;
@@ -600,7 +611,7 @@
           view.metaPlain = true; // so only the tappable pill looks like one
         }
         var back = function () { showCheckedIn(false); };
-        view.actions = withNewStart(withSettings([{ label: 'Done', onClick: closeApp }], back, back));
+        view.actions = withSettings(withNewStart([{ label: 'Done', onClick: closeApp }]), back, back);
         return view;
       }
       var p = me.profile;
@@ -659,9 +670,9 @@
         title = 'You’re too far from the check-in point';
         if (lateWindowAdmin()) {
           // On time is over: moving the point would only help late arrivals. Taking attendance here is a new check-in.
-          var whose = ownsCheckin() ? 'your' : starterName().slice(0, 40) + '’s';
-          line = 'You’re ' + metres(d.distanceM) + ' from ' + whose + ' check\u2011in point. To take attendance here, start a new check\u2011in. ' +
-            (ownsCheckin() ? 'Late check\u2011ins for this one will end.' : starterName().slice(0, 40) + '’s late check\u2011ins will end.');
+          line = 'You’re ' + metres(d.distanceM) + ' from ' + (ownsCheckin() ? 'your' : starterName() + '’s') +
+            ' check\u2011in point. To take attendance here, start a new check\u2011in, which ends ' +
+            (ownsCheckin() ? 'late check\u2011ins for this one.' : 'their late check\u2011ins.');
         } else if (ownsCheckin()) {
           line = 'You’re ' + metres(d.distanceM) + ' from it. If it was set in the wrong place, you can move it to where you are.';
           actions.push({ label: 'Move check-in point here', onClick: moveHere });
@@ -699,10 +710,10 @@
         title: title, line: line, meta: sessionMeta(), actions: actions };
       // Too far or too rough: an admin may decide the distance or accuracy is what's wrong, or (in
       // someone's late window) be at the next venue already.
-      if (res.code === 'OUT_OF_RANGE' || res.code === 'LOW_ACCURACY') {
-        view.actions = withSettings(actions, function () { render(view); }, null, res.code === 'LOW_ACCURACY' ? 'set-accuracy' : 'set-radius');
-      }
       if (kind === 'checkin' && ['OUT_OF_RANGE', 'LOW_ACCURACY', 'NO_SITE'].indexOf(res.code) !== -1) view.actions = withNewStart(view.actions);
+      if (res.code === 'OUT_OF_RANGE' || res.code === 'LOW_ACCURACY') {
+        view.actions = withSettings(view.actions, function () { render(view); }, null, res.code === 'LOW_ACCURACY' ? 'set-accuracy' : 'set-radius');
+      }
       return view;
     },
     auth: function (res, kind) {
@@ -820,9 +831,9 @@
     var s = status && status.activeSession;
     var ending = !(s && s.late) ? ''
       : s.startedByMe ? 'This ends late check-ins for your current check-in. '
-        : 'This ends late check-ins for ' + (s.startedByName ? s.startedByName.slice(0, 40) + '’s check-in. ' : 'the current check-in. ');
+        : 'This ends late check-ins for ' + (s.startedByName ? shortName(s.startedByName, 40) + '’s check-in. ' : 'the current check-in. ');
     confirmDialog(ending + 'Start a ' + mins + '-minute check-in here' + (lateMins ? ', then ' + minutes(lateMins) + ' of late check-ins' : '') +
-      '? Members will need to be within ' + radiusText() + ' of where you’re standing. It can’t be ended early.').then(function (ok) {
+      '? Members will need to be within ' + radiusText() + ' of where you’re standing. Once started, it can’t be ended early.').then(function (ok) {
       confirming = false;
       if (!ok || working) return;
       startHere();
@@ -1311,6 +1322,14 @@
     return (s && s.startedByName) || 'the admin';
   }
 
+  // For the popup, whose text Telegram limits: cut at a word, with "…".
+  function shortName(name, max) {
+    if (name.length <= max) return name;
+    var cut = name.slice(0, max);
+    var space = cut.lastIndexOf(' ');
+    return (space > 0 ? cut.slice(0, space) : cut) + '…';
+  }
+
   function ownsCheckin() {
     var s = status && status.activeSession;
     return !(s && s.startedByMe === false);
@@ -1346,6 +1365,7 @@
     settingsNotice = '';
     settingsStale = false;
     settingsNoMark = window.innerHeight < 800; // most phones: the room goes to the four fields
+    settingsShort = window.innerHeight < 700;
     render(views.settings());
     focusFirst('#screen .title'); // start at the top of the form, not on Save below it
     var field = show && document.getElementById(show);
@@ -1490,10 +1510,13 @@
     var id = renders;
     setTimeout(function () {
       if (!savingSettings || renders !== id) return;
-      // In place of the intro line, so nothing on the form moves.
+      // In place of the intro line, so nothing on the form moves (on a short phone, where it was left out, the form moves down a line).
       var text = 'Still saving. If lots of people are checking in, this can take up to a minute.';
       var line = screenEl.querySelector('.line');
-      if (line) line.textContent = text;
+      if (line) {
+        line.textContent = text;
+        line.hidden = false;
+      }
       statusEl.textContent = text;
     }, TIMING.slowHint);
     // One id per save, shared by the app's backup copies of it, so a late copy can't undo a newer save.
@@ -1875,7 +1898,7 @@
     stamp.setAttribute('aria-hidden', 'true'); // announced through the title
     stamp.appendChild(el('span', 'stamp-label', 'Checked in'));
     stamp.appendChild(el('span', 'stamp-time', atText));
-    // Beside the profile questions the stamp is smaller: just "Late" (the line above says how late).
+    // Beside the profile questions the stamp is smaller: just "Late" (how late is said after saving).
     if (late) stamp.appendChild(el('span', 'stamp-label stamp-late', compact ? 'Late' : late));
     return stamp;
   }
@@ -1926,7 +1949,11 @@
     title.appendChild(document.createTextNode(view.title));
     title.tabIndex = -1;
     screenEl.appendChild(title);
-    if (view.line) screenEl.appendChild(el('p', 'line', view.line));
+    if (view.line) {
+      var lineEl = el('p', 'line', view.line);
+      lineEl.hidden = !!view.lineHidden;
+      screenEl.appendChild(lineEl);
+    }
     if (view.tag) screenEl.appendChild(view.tag);
     if (view.meta || view.reserve) {
       screenEl.appendChild(el('p', 'meta' + (view.meta ? '' : ' placeholder') + (view.metaPlain ? ' is-plain' : ''), view.meta || '\u00a0'));
