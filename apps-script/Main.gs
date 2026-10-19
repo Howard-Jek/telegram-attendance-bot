@@ -50,7 +50,8 @@ function doPost(e) {
   } catch (err) {
     console.error('doPost: ' + redactSecrets_(err && err.stack ? err.stack : String(err)));
     const isSetup = err && err.name === 'SetupError';
-    res = reply_(false, 'SERVER_ERROR', isSetup ? err.message : MESSAGES_.SERVER_ERROR);
+    // A setup problem's message says what to fix; the flag lets the app show it, not a generic line.
+    res = isSetup ? reply_(false, 'SERVER_ERROR', err.message, { setup: true }) : reply_(false, 'SERVER_ERROR', MESSAGES_.SERVER_ERROR);
   }
   if (viaFrame) return frameReply_(res, e.parameter.rid, e.parameter.origin);
   return ContentService.createTextOutput(JSON.stringify(res)).setMimeType(ContentService.MimeType.JSON);
@@ -125,18 +126,22 @@ function withScriptLock_(fn) {
 }
 
 /**
- * Like withScriptLock_, for saving names and groups. It uses a different lock (the owner's user
- * lock; the web app runs as its owner, so every request shares it), so saves never queue behind
- * check-ins when a crowd arrives, while saves still take turns among themselves.
+ * Like withScriptLock_, for adding a person's Members row on their first save. It uses a different
+ * lock (the owner's user lock; the web app runs as its owner, so every request shares it), so saves
+ * never queue behind check-ins. Keep what runs under it short: on 2026-10-19 a crowd of first saves
+ * queued here (see saveMember_).
  */
 function withProfileLock_(fn) {
   const lock = LockService.getUserLock();
-  if (!lock.tryLock(LOCK_WAIT_MS_)) return null;
+  if (!lock.tryLock(PROFILE_LOCK_WAIT_MS_)) return null;
   try {
     return fn();
   } finally {
-    SpreadsheetApp.flush();
-    lock.releaseLock();
+    try {
+      SpreadsheetApp.flush();
+    } finally {
+      lock.releaseLock(); // even if the flush fails
+    }
   }
 }
 

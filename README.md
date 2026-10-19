@@ -399,6 +399,7 @@ change automatically.
 | "Check-in isn't ready yet" | The session has no check-in point. An admin taps **Set check-in point here**. |
 | "Location isn't precise enough", or "approximate location" | Turn on Precise Location for Telegram, and move outdoors or near a window. |
 | The first open after a quiet spell takes a few seconds | Apps Script starting up. Later opens are quicker. |
+| "Still saving your details" or "Couldn't save that yet" in a crowd | The check-in itself is already recorded. The rank, name and group are saved within about 30 s, or the app says so and the person taps their group again. Anyone whose name never saved is asked again at their next check-in. |
 
 ## Development
 

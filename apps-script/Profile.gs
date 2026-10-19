@@ -52,20 +52,45 @@ function handleSaveProfile_(ctx, body) {
   }
   if (!groups.length) group = '';
 
-  const result = withProfileLock_(() => {
-    const now = now_();
-    upsertMember_(user, rank, fullName, group, now);
-    // Already checked in to the open session? That Log row gets the new details too. Check-ins only
-    // ever append rows, so updating an existing row doesn't need the check-in lock.
-    const session = findActiveSession_(sessionsForRead_(), now.getTime());
-    const mine = session ? findCheckin_(dedupeKey_(session.id, user.id)) : null;
-    if (mine) {
-      sheet_(SHEETS_.LOG).getRange(mine.row, LOG_COL_.FULL_NAME, 1, 3)
-        .setValues([[textCell_(fullName), groupCell_(group), textCell_(rank)]]);
+  // When the person tapped (the same on every copy and retry of one save); 0 from an older app.
+  const savedAt = typeof body.savedAt === 'number' && isFinite(body.savedAt) && body.savedAt > 0 ? body.savedAt : 0;
+  const now = now_();
+  const wanted = { rank: rank, fullName: fullName, group: group };
+  const result = saveMember_(user, wanted, now, savedAt);
+  if (!result) {
+    console.warn('saveProfile: a first save got no lock in ' + PROFILE_LOCK_WAIT_MS_ + ' ms');
+    return reply_(false, 'BUSY', MESSAGES_.BUSY);
+  }
+  // The Members row is what counts (the check-in's tab and the roll read names from it); the Log
+  // row's copy is a convenience, so a failure there (tried twice) doesn't undo the save.
+  if (result.wrote) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        copyProfileToLog_(user.id, rank, fullName, group, now);
+        break;
+      } catch (err) {
+        if (attempt === 2) console.warn('saveProfile: saved, but could not copy the details onto today\'s Log row: ' + redactSecrets_(String(err && err.message)));
+      }
     }
-    return reply_(true, 'PROFILE_SAVED', 'Saved.', { groups: groups, profile: { rank: rank, fullName: fullName, group: group } });
-  });
-  return result || reply_(false, 'BUSY', MESSAGES_.BUSY);
+  }
+  const ms = now_().getTime() - now.getTime();
+  if (ms > SLOW_SAVE_MS_) console.warn('saveProfile took ' + ms + ' ms');
+  return reply_(true, 'PROFILE_SAVED', 'Saved.', { groups: groups, profile: result.profile });
+}
+
+const SLOW_SAVE_MS_ = 5000;
+
+/**
+ * Already checked in to the open session? That Log row gets the new details too. No lock: check-ins
+ * only ever append rows, so this row stays where it is, and it is this person's alone.
+ */
+function copyProfileToLog_(userId, rank, fullName, group, now) {
+  const session = findActiveSession_(sessionsForRead_(), now.getTime());
+  const mine = session ? findCheckin_(dedupeKey_(session.id, userId)) : null;
+  if (!mine) return;
+  sheet_(SHEETS_.LOG).getRange(mine.row, LOG_COL_.FULL_NAME, 1, 3)
+    .setValues([[textCell_(fullName), groupCell_(group), textCell_(rank)]]);
+  SpreadsheetApp.flush();
 }
 
 /**
@@ -150,18 +175,53 @@ function withMemberNames_(people, members) {
   });
 }
 
-/** Call with the profile lock held (withProfileLock_). */
-function upsertMember_(user, rank, fullName, group, now) {
+/**
+ * Writes the person's Members row. Returns {profile, wrote}: the profile now saved, and whether this
+ * request wrote it (not when a newer save of theirs is already in: a late copy of an older one,
+ * sent before the app said it couldn't save and they picked again, must not undo it). Returns null
+ * if a first save couldn't get the profile lock.
+ * A saved row is the person's own (the bot never moves or deletes Members rows), so changing it
+ * takes no lock. Only adding the row does, so that two copies of one first save can't both add
+ * one; that is all that runs under it.
+ */
+function saveMember_(user, wanted, now, savedAt) {
+  const key = 'member:' + user.id;
+  // The copy written after each save, with its time (see below).
+  const newer = () => {
+    const c = savedAt ? cacheGetJson_(key) : null;
+    return c && !c.none && typeof c.savedAt === 'number' && c.savedAt > savedAt
+      ? { profile: { rank: c.rank || '', fullName: c.fullName, group: c.group }, wrote: false } : null;
+  };
   const sheet = sheet_(SHEETS_.MEMBERS);
-  const fields = [textCell_(fullName), groupCell_(group), textCell_(user.name), textCell_(user.username), now, textCell_(rank)];
+  const fields = [textCell_(wanted.fullName), groupCell_(wanted.group), textCell_(user.name), textCell_(user.username), now,
+    textCell_(wanted.rank)];
+  const write = (found) => {
+    if (found) {
+      sheet.getRange(found.row, MEMBER_COL_.FULL_NAME, 1, fields.length).setValues([fields]);
+    } else {
+      sheet.appendRow(["'" + user.id].concat(fields)); // text, so the id is found whatever the column format
+    }
+  };
   const found = findMember_(user.id);
   if (found) {
-    sheet.getRange(found.row, MEMBER_COL_.FULL_NAME, 1, fields.length).setValues([fields]);
+    const kept = newer();
+    if (kept) return kept;
+    write(found);
+    SpreadsheetApp.flush();
   } else {
-    sheet.appendRow(["'" + user.id].concat(fields)); // text, so the id is found whatever the column format
+    const added = withProfileLock_(() => { // its flush commits the row
+      const again = findMember_(user.id);
+      const kept = again ? newer() : null;
+      if (kept) return kept;
+      write(again);
+      return { profile: wanted, wrote: true };
+    });
+    if (!added) return null;
+    if (!added.wrote) return added;
   }
-  SpreadsheetApp.flush(); // copy only what is really saved
-  cachePutJson_('member:' + user.id, { rank: rank, fullName: fullName, group: group }, CACHE_SEC_.MEMBER);
+  // Only once it is really saved (status answers from this copy), with when it was tapped.
+  cachePutJson_(key, Object.assign({}, wanted, { savedAt: savedAt }), CACHE_SEC_.MEMBER);
+  return { profile: wanted, wrote: true };
 }
 
 /**

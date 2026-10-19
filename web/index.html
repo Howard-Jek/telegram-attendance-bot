@@ -392,6 +392,11 @@
     slowHint: 8000,
     tapGuard: 350,         // taps on a screen's buttons this soon after it appears are the second half of a double tap
     settingsBudget: 30000, // a settings save stops retrying BUSY sooner: the admin is waiting on a form
+    // Saving rank, name and group (the check-in already stands). On 2026-10-19 a crowd waited minutes
+    // behind a silent spinner; now it never spins longer than profileDeadline.
+    profileBudget: 20000,      // stop starting BUSY retries after this
+    profileDeadline: 30000,    // then say so, whatever is still in flight
+    profileHedges: [14000],    // one backup copy, once the first should have answered (5 s server lock wait + start-up + reply)
   };
   var PHONE_PLATFORMS = ['android', 'ios'];
   var APPROXIMATE_M = 1000; // accuracy this coarse means the phone shares an approximate location
@@ -413,6 +418,7 @@
   var me = null;           // {groups, profile} from the server once checked in (null: not offered)
   var picking = false;     // the group/name picker is open by choice ("Change")
   var savingProfile = false;
+  var saveSeq = 0;         // the latest save; an older save's answer is ignored
   var pickerError = '';
   var nameInvalid = false;
   var rankInvalid = false;
@@ -793,6 +799,7 @@
   }
 
   function loadStatus(autoCheckIn, readyLine) {
+    abandonSave();
     render(views.loading('Checking…'));
     // Arriving from the bot's button for an open check-in, someone who already allowed location
     // gets their fix while the server answers, instead of after it.
@@ -835,6 +842,7 @@
   function startHere() {
     if (working) return;
     working = true;
+    abandonSave();
     locate('start', function (fix) {
       render(views.loading('Starting check-in…'));
       api('startSession', { location: sendable(fix) }).then(function (res) {
@@ -1238,6 +1246,7 @@
       return;
     }
     savingProfile = true;
+    var seq = ++saveSeq;
     draftName = nameInput ? nameInput.value : null;
     draftRank = rankInput ? rankInput.value : null;
     Array.prototype.forEach.call(document.querySelectorAll('.choice, #actions button, #full-name, #rank'), function (c) { c.disabled = true; });
@@ -1251,41 +1260,129 @@
     }
     statusEl.textContent = 'Saving…';
     var id = renders;
+    var noGroups = !me.groups.length;
     setTimeout(function () {
-      if (savingProfile && renders === id) statusEl.textContent = 'Still saving. A slow connection can take a little while.';
+      if (!savingProfile || seq !== saveSeq || renders !== id) return;
+      // On the screen, in place of the line above the questions, so the wait has a reason.
+      var text = 'You’re checked in. Still saving your details: lots of people are checking in right now.';
+      var line = screenEl.querySelector('.line');
+      if (line) line.textContent = text;
+      statusEl.textContent = text;
     }, TIMING.slowHint);
-    api('saveProfile', rankKnown ? { rank: rank, fullName: name, group: group } : { fullName: name, group: group }).then(function (res) {
+    var startedAt = Date.now();
+    var sent = rankKnown ? { rank: rank, fullName: name, group: group } : { fullName: name, group: group };
+    sent.savedAt = startedAt; // the same on every copy and retry, so the server can drop a late copy of an older save
+    var live = function () { return seq === saveSeq && !finished; };
+    var finished = false; // the screen has shown an outcome (a late success may still replace a failure)
+    var deadline = setTimeout(function () {
+      if (seq !== saveSeq || finished) return;
+      showFailed({ code: 'BUSY' });
+    }, TIMING.profileDeadline);
+
+    function showSaved(data) {
+      var late = finished; // the "couldn't save" notice is already up
+      clearTimeout(deadline);
+      finished = true;
       savingProfile = false;
-      if (res.code === 'PROFILE_SAVED') {
-        haptic('success');
-        me = { groups: res.data.groups, profile: res.data.profile };
-        picking = false;
-        pickerError = '';
-        nameInvalid = false;
-        rankInvalid = false;
-        rowError = '';
-        draftName = null;
-        draftRank = null;
-        showCheckedIn(false);
-        var p = me.profile;
-        statusEl.textContent = 'Saved: ' + [p.group, displayName(p)].filter(Boolean).join(', ') + '.';
-        focusFirst('.tag');
-        return;
+      me = { groups: data.groups || me.groups, profile: data.profile };
+      if (late) {
+        // They may have moved on (Cancel, settings, a new check-in): don't draw over that. The next
+        // checked-in screen shows the saved details anyway.
+        var stillHere = lastCheckin && (current === 'profile' || current === 'checked-in') && !working && !confirming && !settingsBack;
+        if (!stillHere) {
+          resetProfileForm();
+          return;
+        }
+        // Typing again: keep the boxes and the keyboard, and take the notice down.
+        var active = document.activeElement;
+        if (active && (active.id === 'rank' || active.id === 'full-name')) {
+          pickerError = '';
+          rowError = '';
+          nameInvalid = rankInvalid = false;
+          picking = true; // so a later redraw keeps the boxes they're editing
+          var notice = document.getElementById('picker-error');
+          if (notice) notice.remove();
+          var line = screenEl.querySelector('.line');
+          if (line) line.textContent = 'You’re checked in, and your details are saved.';
+          statusEl.textContent = 'Saved.';
+          return;
+        }
       }
+      haptic('success');
+      resetProfileForm();
+      showCheckedIn(false);
+      var p = me.profile;
+      statusEl.textContent = 'Saved: ' + [p.group, displayName(p)].filter(Boolean).join(', ') + '.';
+      focusFirst('.tag');
+    }
+
+    function showFailed(res) {
+      clearTimeout(deadline);
+      finished = true;
+      savingProfile = false;
       haptic('error');
       if (res.code === 'INVALID_GROUP' && res.data && Array.isArray(res.data.groups)) me.groups = res.data.groups;
       nameInvalid = res.code === 'INVALID_NAME';
       rankInvalid = res.code === 'INVALID_RANK';
       rowError = nameInvalid || rankInvalid ? res.message : '';
+      var again = noGroups ? 'tap Save again' : 'tap your group again';
       // Whatever went wrong, the check-in itself stands; say so.
       pickerError = nameInvalid || rankInvalid ? ''
-        : res.code === 'NETWORK' || res.code === 'BUSY' ? 'Couldn’t save that. You’re still checked in; tap your group again.'
-          : res.message;
+        : res.code === 'BUSY' ? 'Couldn’t save that yet: lots of people are checking in. You’re still checked in; ' + again + ' in a minute.'
+          : res.code === 'SERVER_ERROR' && res.data && res.data.setup ? 'Couldn’t save that. You’re still checked in. ' + res.message // for an admin to fix
+            : res.code === 'NETWORK' || res.code === 'SERVER_ERROR' ? 'Couldn’t save that. You’re still checked in; ' + again + '.'
+              : res.message;
       picking = picking || !profileNeeded();
       showCheckedIn(false);
       statusEl.textContent = rowError || pickerError;
       focusFirst(rankInvalid ? '#rank' : nameInvalid ? '#full-name' : '#picker-error');
+    }
+
+    api('saveProfile', sent, startedAt, TIMING.profileBudget, TIMING.profileHedges, live).then(function (res) {
+      if (res.code === 'PROFILE_SAVED') return res;
+      if (res.code !== 'BUSY' && res.code !== 'NETWORK' && res.code !== 'SERVER_ERROR') return res;
+      if (seq !== saveSeq) return res; // a newer save is in charge
+      // The server may have saved it after all (a copy that got through, or an answer that was lost):
+      // ask, since status takes no lock.
+      return api('status', null, startedAt, TIMING.profileBudget).then(function (st) {
+        var d = st.ok && st.data;
+        return d && sameProfile(d.profile, sent) ? { code: 'PROFILE_SAVED', data: { groups: d.groups, profile: d.profile } } : res;
+      });
+    }).then(function (res) {
+      if (seq !== saveSeq) return; // a newer save is in charge
+      if (res.code === 'PROFILE_SAVED') return showSaved(res.data);
+      if (!finished) showFailed(res); // after the deadline the notice is already up
     });
+  }
+
+  // Whether the saved profile is the one just sent. norm tidies text as cleanText_ in Profile.gs does;
+  // a server from before rank had its own box keeps none, so rank is compared only when it has one.
+  function sameProfile(p, sent) {
+    if (!p) return false;
+    var norm = function (v) {
+      return String(v || '').normalize('NFC')
+        .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g, ' ')
+        .replace(/\s+/g, ' ').trim();
+    };
+    return norm(p.fullName) === norm(sent.fullName) && norm(p.group) === norm(sent.group) &&
+      (sent.rank === undefined || !('rank' in p) || norm(p.rank).toUpperCase() === norm(sent.rank).toUpperCase());
+  }
+
+  // Back to no questions open, no notice and no drafts.
+  function resetProfileForm() {
+    picking = false;
+    pickerError = '';
+    nameInvalid = false;
+    rankInvalid = false;
+    rowError = '';
+    draftName = null;
+    draftRank = null;
+  }
+
+  // A save in flight no longer matters (a new check-in, or the status reloaded): ignore its answer.
+  function abandonSave() {
+    saveSeq++;
+    savingProfile = false;
   }
 
   // ---------- check-in settings (admins) ----------
@@ -1558,22 +1655,24 @@
   // another frame copy, and the first reply wins.
   // firstTry: when this request was first sent (BUSY retries keep it). budget: how long to keep
   // retrying BUSY (default TIMING.busyBudget).
-  function api(action, extra, firstTry, budget) {
+  // live (optional): false once nobody wants the answer any more; then no new copy or retry goes out.
+  function api(action, extra, firstTry, budget, hedges, live) {
     var body = { action: action, initData: tg.initData, platform: tg.platform };
     if (extra) for (var k in extra) body[k] = extra[k];
     var started = firstTry || Date.now();
-    return exchange(body).then(function (out) {
+    return exchange(body, hedges, live).then(function (out) {
       var res = out.res || { ok: false, code: 'NETWORK', message: 'Check your connection and try again.' };
       // A slow or lost reply already got its extra copies above. BUSY means a crowd is being
       // recorded one at a time: wait a random while (so a crowd's retries spread out) and go again,
       // for as long as a whole crowd can take. Waiting costs the queue nothing.
-      if (res.code === 'BUSY' && Date.now() - started < (budget || TIMING.busyBudget)) {
+      if (res.code === 'BUSY' && Date.now() - started < (budget || TIMING.busyBudget) && (!live || live())) {
         if (current === 'loading') {
           setTitle('Trying again…');
           setHint('Lots of people are checking in right now. Trying again automatically.');
         }
         return sleep(TIMING.retryAfter * (1 + Math.random() * 1.5)).then(function () {
-          return api(action, extra, started, budget);
+          if (live && !live()) return res;
+          return api(action, extra, started, budget, hedges, live);
         });
       }
       return res;
@@ -1581,10 +1680,12 @@
   }
 
   // Sends body through the frame at once, then a normal copy after hedgeSecond and another frame
-  // copy after hedgeThird, or straight away when a copy fails. Resolves {res, via, ms, failures};
-  // res is null if nothing usable came back in time.
-  function exchange(body) {
-    var plan = [['frame', 0], ['fetch', TIMING.hedgeSecond], ['frame', TIMING.hedgeThird]];
+  // copy after hedgeThird (or one copy per time in hedges), or straight away when a copy fails.
+  // Resolves {res, via, ms, failures}; res is null if nothing usable came back in time. Once live()
+  // is false no further copy goes out, though one already sent may still answer.
+  function exchange(body, hedges, live) {
+    var at = hedges || [TIMING.hedgeSecond, TIMING.hedgeThird];
+    var plan = [['frame', 0]].concat(at.map(function (ms, i) { return [i % 2 ? 'frame' : 'fetch', ms]; }));
     return new Promise(function (resolve) {
       var t0 = Date.now();
       var done = false;
@@ -1601,7 +1702,7 @@
         resolve({ res: res, via: via, ms: Date.now() - t0, failures: failures });
       }
       function launch(afterFailure) {
-        if (done || launched >= plan.length) return;
+        if (done || launched >= plan.length || (live && launched && !live())) return;
         var kind = plan[launched][0];
         var n = ++launched;
         pending++;

@@ -357,12 +357,26 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
     held: false,
     tryLock(ms) {
       env.events.push({ type: 'tryUserLock', ms });
-      if (env.userLockHeldElsewhere) return false;
+      if (env.userRace) {
+        // Another request that runs to completion between this one's pre-lock work and its lock.
+        const competitor = env.userRace;
+        env.userRace = null;
+        competitor();
+      }
+      if (env.userLockHeldElsewhere || userLock.held) return false; // held: the wait runs out
       userLock.held = true;
+      env.events.push({ type: 'userLock' });
+      if (env.whileUserLockHeld) {
+        // Another request that arrives while this one holds the lock.
+        const competitor = env.whileUserLockHeld;
+        env.whileUserLockHeld = null;
+        competitor();
+      }
       return true;
     },
-    releaseLock() { userLock.held = false; },
+    releaseLock() { if (userLock.held) env.events.push({ type: 'userUnlock' }); userLock.held = false; },
   };
+  env.userLock = userLock;
 
   const log = (level) => (...a) => env.logs.push({ level, text: a.map(String).join(' ') });
 
@@ -375,7 +389,11 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
         if (id !== ss.getId()) throw new Error(`Unexpected error while getting the method or property openById on object SpreadsheetApp.`);
         return ss;
       },
-      flush: () => env.events.push({ type: 'flush' }),
+      flush: () => {
+        env.events.push({ type: 'flush' });
+        // env.flushThrows: a predicate; when it returns true this flush fails, as Sheets can under load.
+        if (env.flushThrows && env.flushThrows()) throw new Error('Service Spreadsheets timed out while accessing document with id x.');
+      },
       DeveloperMetadataVisibility: { DOCUMENT: 'DOCUMENT', PROJECT: 'PROJECT' },
       DeveloperMetadataLocationType: { SHEET: 'SHEET', SPREADSHEET: 'SPREADSHEET', ROW: 'ROW', COLUMN: 'COLUMN' },
     },
@@ -514,6 +532,10 @@ function createEnv({ props = {}, telegram = {}, reverseFileOrder = false } = {})
   env.call = (name, ...args) => context[name](...args);
   /** Run `competitor` (e.g. another env.post) just before the next tryLock, i.e. between a request's pre-lock work and its lock. */
   env.raceBeforeNextLock = (competitor) => { env.race = competitor; };
+  /** The same, just before the next tryLock on the user (profile) lock. */
+  env.raceBeforeNextUserLock = (competitor) => { env.userRace = competitor; };
+  /** ...and one that arrives just after the next request takes the user lock (so it finds it held). */
+  env.raceWhileUserLockHeld = (competitor) => { env.whileUserLockHeld = competitor; };
   env.eval = (code) => vm.runInContext(code, context);
   /** POST a JSON body to doPost and return the parsed JSON response. */
   env.post = (body) => {

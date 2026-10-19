@@ -1072,7 +1072,9 @@ test('burst: saving a name and group never queues behind check-ins', () => {
   assert.equal(env.events.filter((e) => e.type === 'tryUserLock').length, 1);
   assert.deepEqual([env.records('Log')[0].full_name, env.records('Log')[0].group], ['Cy Tan', 'Bravo'], 'today\'s row still gets the details');
   env.userLockHeldElsewhere = true;
-  assert.equal(env.saveProfile(MEMBER, 'Cy Tan', 'Alpha').code, 'BUSY', 'saves still take turns among themselves');
+  assert.equal(env.saveProfile(MEMBER, 'Cy Tan', 'Alpha').code, 'PROFILE_SAVED', 'a change to a saved row takes no lock (2026-10-19)');
+  env.checkin(MEMBER2);
+  assert.equal(env.saveProfile(MEMBER2, 'Di Ong', 'Alpha').code, 'BUSY', 'first saves take turns among themselves');
 });
 
 test('burst: a profile save never writes the sessions copy (only the check-in lock holder may)', () => {

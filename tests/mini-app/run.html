@@ -85,6 +85,11 @@
         });
         await wait(30);
       }
+      if (step.focus) {
+        var target = doc().querySelector(step.focus);
+        if (!target) { errors.push('no field ' + step.focus); break; }
+        target.focus();
+      }
       if (step.fill) {
         var field = doc().querySelector(step.fill[0]);
         if (!field) { errors.push('no field ' + step.fill[0] + ' (at ' + state() + ')'); break; }
@@ -231,6 +236,30 @@
         if (!r || r.top < 0 || r.bottom > bar.top) errors.push(e.inView + ' not in view (' + (r && Math.round(r.top)) + '-' + (r && Math.round(r.bottom)) + ', bar at ' + Math.round(bar.top) + ')');
       }
       if (e.haptics && JSON.stringify(log.haptics) !== JSON.stringify(e.haptics)) errors.push('haptics ' + JSON.stringify(log.haptics));
+      if (e.savingEndsWithin !== undefined) {
+        // From the first saveProfile sent to the last moment a save spinner was on screen.
+        var sentAt = (log.timeline.filter(function (m) { return /^sent:saveProfile/.test(m.what); })[0] || {}).t;
+        var spunUntil = log.spinUntil;
+        if (sentAt === undefined) errors.push('no saveProfile sent');
+        else if (spunUntil === undefined || spunUntil - sentAt > e.savingEndsWithin) errors.push('save spinner lasted ' + (spunUntil === undefined ? 'until the end' : (spunUntil - sentAt) + ' ms'));
+      }
+      if (e.saveGroupsAfter) {
+        // Once a save for `first` went out, no copy of a save for `none` follows it.
+        var saves = log.calls.filter(function (c) { return c.action === 'saveProfile'; }).map(function (c) { return c.group; });
+        var from = saves.indexOf(e.saveGroupsAfter.first);
+        if (from === -1) errors.push('no save for ' + e.saveGroupsAfter.first);
+        else if (saves.slice(from).indexOf(e.saveGroupsAfter.none) !== -1) errors.push('a save for ' + e.saveGroupsAfter.none + ' went out after it: ' + JSON.stringify(saves));
+      }
+      if (e.lastCall) {
+        var lastAction = log.calls.length ? log.calls[log.calls.length - 1].action : null;
+        if (lastAction !== e.lastCall) errors.push('last call ' + lastAction);
+      }
+      if (e.callCounts) {
+        Object.keys(e.callCounts).forEach(function (a) {
+          var n = log.calls.filter(function (c) { return c.action === a; }).length;
+          if (n > e.callCounts[a]) errors.push(a + ' sent ' + n + ' times');
+        });
+      }
       if (e.peeks) {
         // The field's label shows above the bar (and its fade), so it reads as "more below".
         var field = doc().getElementById(e.peeks).closest('.field').getBoundingClientRect();

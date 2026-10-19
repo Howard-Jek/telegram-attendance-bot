@@ -12,25 +12,50 @@
   var log = (window.__mini = { scenario: name, calls: [], confirmed: [], haptics: [], openedSettings: 0, closed: 0, nativeConfirms: 0, openedLinks: [], timeline: [], vias: [] });
   var t0 = Date.now();
   function mark(what) { log.timeline.push({ what: what, t: Date.now() - t0 }); } // function declarations are hoisted
+  // When a save's spinner was last on screen (spinUntil stays unset while one is showing). An
+  // observer, not a timer, so it is up to date before any later check runs.
+  new MutationObserver(function () {
+    var on = !!document.querySelector('.is-saving');
+    if (on && !log.spinning) { log.spinning = true; log.spinUntil = undefined; }
+    if (!on && log.spinning) { log.spinning = false; log.spinUntil = Date.now() - t0; }
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
   // The page must never fall back to the browser's own confirm() inside Telegram.
   window.confirm = function () { log.nativeConfirms++; return true; };
 
   // ---------- backend ----------
+  // A mock reply's own `delay` (ms) overrides the scenario's; it isn't part of the reply.
+  function reply(next) {
+    if (next.delay === undefined) return next;
+    var copy = Object.assign({}, next);
+    delete copy.delay;
+    return copy;
+  }
   var queues = {};
   Object.keys(sc.api || {}).forEach(function (k) { queues[k] = sc.api[k].slice(); });
+  // A reply may be { by: function (body, n) }: chosen from the request (n counts calls with the same group).
+  var seen = {};
+  function pick(body) {
+    var q = queues[body.action] || [];
+    var next = q.length > 1 ? q.shift() : q[0];
+    if (next && typeof next.by === 'function') {
+      var k = body.action + ':' + body.group;
+      seen[k] = (seen[k] || 0) + 1;
+      next = next.by(body, seen[k]);
+    }
+    return next;
+  }
   window.fetch = function (url, opts) {
     var body = JSON.parse(opts.body);
     log.calls.push(body);
     log.vias.push('fetch');
     mark('sent:' + body.action);
-    var q = queues[body.action] || [];
-    var next = q.length > 1 ? q.shift() : q[0];
+    var next = pick(body);
     if (!next) return Promise.reject(new TypeError('no mock response for ' + body.action));
     if (next.pending) return new Promise(function () {});
     if (next.network) return Promise.reject(new TypeError('Failed to fetch'));
-    var text = next.html ? '<!DOCTYPE html><html><body>Too many simultaneous invocations</body></html>' : JSON.stringify(next);
+    var text = next.html ? '<!DOCTYPE html><html><body>Too many simultaneous invocations</body></html>' : JSON.stringify(reply(next));
     return new Promise(function (resolve) {
-      setTimeout(function () { mark('answered:' + body.action); resolve(new Response(text, { status: 200 })); }, sc.apiDelay || 60);
+      setTimeout(function () { mark('answered:' + body.action); resolve(new Response(text, { status: 200 })); }, next.delay || sc.apiDelay || 60);
     });
   };
 
@@ -43,8 +68,7 @@
     log.calls.push(body);
     log.vias.push('frame');
     mark('sent:' + body.action + ':frame');
-    var q = queues[body.action] || [];
-    var next = q.length > 1 ? q.shift() : q[0];
+    var next = pick(body);
     if (!next || next.pending) return; // no answer yet: the frame stays loading
     if (next.network || next.html) {
       // The frame loads an error page, with no message.
@@ -54,8 +78,8 @@
     }
     setTimeout(function () {
       mark('answered:' + body.action);
-      window.postMessage({ attendanceReply: true, rid: rid, res: next }, location.origin);
-    }, sc.frameDelay || sc.apiDelay || 60);
+      window.postMessage({ attendanceReply: true, rid: rid, res: reply(next) }, location.origin);
+    }, next.delay || sc.frameDelay || sc.apiDelay || 60);
   };
 
   // ---------- the WebView's own geolocation ----------

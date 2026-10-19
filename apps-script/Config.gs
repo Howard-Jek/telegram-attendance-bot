@@ -5,6 +5,8 @@
 
 const TZ_ = 'Asia/Singapore';
 const LOCK_WAIT_MS_ = 10000;
+// A first profile save waits less: the app copies a save only after this plus start-up, and says so if it's slow.
+const PROFILE_LOCK_WAIT_MS_ = 5000;
 
 // The web app's /exec URL, used by setup() to point the bot's webhook here. Not a secret (the Mini
 // App calls it too). A WEBAPP_URL Script Property overrides it, e.g. for a copy of this project.
