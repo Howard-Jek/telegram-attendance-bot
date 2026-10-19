@@ -14,7 +14,7 @@ function handleStatus_(ctx) {
   const session = findActiveSession_(sessionsForRead_(), nowMs);
   let mine = session ? knownCheckin_(session, ctx.user.id) : null;
   if (mine === undefined) mine = findCheckin_(dedupeKey_(session.id, ctx.user.id));
-  const view = session ? sessionView_(session, nowMs) : null;
+  const view = session ? (admin ? sessionView_(session, nowMs) : memberSessionView_(session, nowMs)) : null;
   if (view && !admin) delete view.startedByName; // anyone with the link can call status
   if (view && admin) view.startedByMe = isStarter_(session, ctx.user); // only they may change it
   const data = {
@@ -24,7 +24,7 @@ function handleStatus_(ctx) {
     radiusM: ctx.cfg.radiusM,
     maxAccuracyM: ctx.cfg.maxAccuracyM,
     activeSession: view,
-    myCheckin: mine ? Object.assign({ at: mine.at.toISOString(), atText: hhmm_(mine.at) }, lateness_(session, mine.at)) : null,
+    myCheckin: mine ? { at: mine.at.toISOString(), atText: hhmm_(mine.at) } : null, // whether it was late: the Log only
   };
   // Only a checked-in member sees their group and name straight away; others get them with the check-in.
   if (mine) Object.assign(data, profileData_(ctx.user.id));
@@ -234,21 +234,20 @@ function announceSession_(ctx, session) {
   return posted;
 }
 
+// The group is never told about lateness (the owner's wish: late arrivals aren't singled out).
+// The Log, the check-in's tab and the Nominal Roll mark it.
 function openText_(session) {
-  const late = hasLateWindow_(session)
-    ? '\nAfter ' + hhmm_(session.closesAt) + ' it’s marked late, until ' + hhmm_(session.lateUntil) + '.' : '';
-  return '📍 Check-in is open until ' + hhmm_(session.closesAt) + '.\nTap the button when you arrive.' + late;
+  return '📍 Check-in is open until ' + hhmm_(session.closesAt) + '.\nTap the button when you arrive.';
 }
 
-/** The live message once the on-time window has closed (the button stays, for late check-ins). */
-function lateText_(session) {
-  return '⏰ On-time check-in closed at ' + hhmm_(session.closesAt) + '.\nStill on the way? Tap the button by ' +
-    hhmm_(session.lateUntil) + ' to check in late.';
+/** The live message once the on-time window has closed: still open, button and all, until the late window ends. */
+function stillOpenText_(session) {
+  return '📍 Check-in is still open until ' + hhmm_(session.lateUntil) + '.\nTap the button when you arrive.';
 }
 
 /** The live message for the session, as it should read now. */
 function liveText_(session, nowMs) {
-  return nowMs >= session.closesAt.getTime() ? lateText_(session) : openText_(session);
+  return nowMs >= session.closesAt.getTime() ? stillOpenText_(session) : openText_(session);
 }
 
 function hasLateWindow_(session) {
@@ -324,6 +323,17 @@ function latestStarted_(sessions) {
     if (!best || s.opensAt.getTime() > best.opensAt.getTime()) best = s;
   });
   return best;
+}
+
+/**
+ * What a member is told: one plain window. Once on time is over it simply closes at late_until,
+ * so no copy of the app, however old, can tell a member they are late (the owner, 2026-10-19).
+ * Admins get sessionView_, with the late window, as they run it.
+ */
+function memberSessionView_(s, nowMs) {
+  const view = sessionView_(s, nowMs);
+  if (!view.late) return view;
+  return Object.assign(view, { late: false, closesAt: view.lateUntil, closesAtText: view.lateUntilText });
 }
 
 /** nowMs says whether it is in its late window yet. */

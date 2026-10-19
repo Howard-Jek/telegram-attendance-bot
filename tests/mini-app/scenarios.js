@@ -26,8 +26,15 @@
   }
   // The same session after its on-time window (11:30), taking late check-ins until 12:30.
   var LATE = { late: true, lateUntil: '2026-09-21T04:30:15.000Z', lateUntilText: '12:30' };
-  function lateCheckedIn(minutesLate, profile) {
+  // A check-in in the late window, as the server answers it: nothing says it was late.
+  function lateCheckedIn(profile) {
     var r = checkedIn(GROUPS, profile === undefined ? { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } : profile);
+    r.data = Object.assign({}, r.data, { atText: '11:42', lateUntilText: '12:30', openUntilText: '12:30' });
+    return r;
+  }
+  // The same from a server deployed before late check-ins went silent (it still says how late).
+  function olderLateCheckedIn(minutesLate) {
+    var r = checkedIn(GROUPS, { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' });
     r.data = Object.assign({}, r.data, { late: true, minutesLate: minutesLate, atText: '11:42', lateUntilText: '12:30' });
     return r;
   }
@@ -631,43 +638,78 @@
       expect: { state: 'profile', notText: ['Started by'] } },
 
     // ---------- late check-ins ----------
+    // Owner, 2026-10-19: "just say checked in when confirmed and silently mark them late in the google
+    // sheet". Members never read the word late; admins see the late window, as they run it.
     // An admin isn't checked in on opening once on time is over: they may be here to start the next one.
     'late-ready': {
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })] },
-      expect: { state: 'ready-late', text: ['On\u2011time check\u2011in has closed', 'You can still check in until 12:30. It will be marked late.',
-        'On time until 11:30, late\u00a0until 12:30\nStarted by Bo Admin'], buttons: ['Check in late', 'Start a new check-in'], calls: ['status'] } },
+      expect: { state: 'ready-late', text: ['On\u2011time check\u2011in has closed', 'You can still check in until 12:30. Only the Sheet marks it late.',
+        'On time until 11:30, late\u00a0until 12:30\nStarted by Bo Admin'], buttons: ['Check in', 'Start a new check-in'], calls: ['status'] } },
     'late-checkin': { location: { lm: GPS }, startParam: 'open',
-      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(12)] },
-      expect: { state: 'checked-in', text: ['You’re on\u00a0the\u00a0list, marked late', 'You checked in 12 minutes after the on-time check-in closed at 11:30.',
-        'Late · 12 min', '11:42', 'Bravo · CPL Cy Tan'], buttons: ['Done'] } },
-    'late-checkin-one-minute': { location: { lm: GPS },
-      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(1)] },
-      expect: { state: 'checked-in', text: ['1 minute after', 'Late · 1 min'], calls: ['status', 'checkin'] } },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn()] },
+      expect: { state: 'checked-in', text: ['You’re on the list', 'Check-in closes at 12:30.', '11:42', 'Bravo · CPL Cy Tan'], notText: ['late', 'Late'],
+        buttons: ['Done'], haptics: ['success'] } },
+    // Status read before on time ended, check-in just after: the line still gives the time it closes now.
+    'late-checkin-status-before-close': { location: { lm: GPS },
+      api: { status: [status({ activeSession: MEMBER_SESSION })], checkin: [lateCheckedIn()] },
+      expect: { state: 'checked-in', text: ['You’re on the list', 'Check-in closes at 12:30.'], notText: ['late', 'Late'] } },
+    // Until the server is updated it still says how late: the app doesn't repeat it.
+    'late-checkin-older-server': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [olderLateCheckedIn(12)] },
+      expect: { state: 'checked-in', text: ['You’re on the list', 'Check-in closes at 12:30.'], notText: ['late', 'Late'], haptics: ['success'] } },
     'late-admin-checks-in': { location: { lm: GPS },
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })],
-        checkin: [lateCheckedIn(3)] },
-      steps: [{ click: 'Check in late' }],
-      expect: { state: 'checked-in', text: ['marked late', 'Late · 3 min'], buttons: ['Done', 'Start a new check-in'] } },
+        checkin: [lateCheckedIn()] },
+      steps: [{ click: 'Check in' }],
+      expect: { state: 'checked-in', title: 'You’re on the list', line: 'Late check-ins are open until 12:30.',
+        notText: ['marked late', 'Late ·', 'minute', 'on time'], buttons: ['Done', 'Start a new check-in'], haptics: ['success'] } },
+    'late-admin-checks-in-older-server': { location: { lm: GPS },
+      api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })],
+        checkin: [olderLateCheckedIn(12)] },
+      steps: [{ click: 'Check in' }],
+      expect: { state: 'checked-in', title: 'You’re on the list', line: 'Late check-ins are open until 12:30.',
+        notText: ['marked late', 'Late ·', 'minute', 'on time'], haptics: ['success'] } },
+    // The current server gives members one plain window once on time is over: no late flag at all.
+    'late-checkin-member-plain-window': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, { closesAtText: '12:30', lateUntilText: '12:30', late: false }) })],
+        checkin: [(function () { var r = lateCheckedIn(); r.data = Object.assign({}, r.data, { closesAtText: '12:30' }); return r; })()] },
+      expect: { state: 'checked-in', title: 'You’re on the list', line: 'Check-in closes at 12:30.', notText: ['late', 'Late'], haptics: ['success'] } },
+    // Still busy after the retries, but the check-in was recorded: the status read finds it, late or not.
+    'late-busy-but-recorded': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) }),
+        status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE), myCheckin: { at: '2026-09-21T03:42:00.000Z', atText: '11:42' } })],
+        checkin: [{ ok: false, code: 'BUSY', message: 'The server is busy. Please try again in a moment.' }] },
+      expect: { state: 'checked-in', text: ['11:42'], line: 'Check-in closes at 12:30.', notText: ['late', 'Late', 'Busy right now'], haptics: ['success'], waitMs: 20000 } },
+    'late-busy-but-recorded-older-server': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) }),
+        status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE), myCheckin: { at: '2026-09-21T03:42:00.000Z', atText: '11:42', late: true, minutesLate: 12 } })],
+        checkin: [{ ok: false, code: 'BUSY', message: 'The server is busy. Please try again in a moment.' }] },
+      expect: { state: 'checked-in', text: ['11:42'], line: 'Check-in closes at 12:30.', notText: ['late', 'Late', 'Busy right now'], haptics: ['success'], waitMs: 20000 } },
     'late-checkin-profile': { location: { lm: GPS },
-      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(12, null)] },
-      expect: { state: 'profile', text: ['You’re checked in. Add your rank and name, then pick your group.', 'marked late'], notText: ['Late · 12 min'] } },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(null)] },
+      expect: { state: 'profile', text: ['You’re checked in. Add your rank and name, then pick your group.'], notText: ['late', 'Late'] } },
+    'late-checkin-profile-saved': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(null)],
+        saveProfile: [saved('Cy Tan', 'Bravo')] },
+      steps: [{ waitState: 'profile' }, { fill: ['#rank', 'CPL'] }, { fill: ['#full-name', 'Cy Tan'] }, { tap: 'Bravo' }],
+      expect: { state: 'checked-in', text: ['You’re on the list', 'Check-in closes at 12:30.'], notText: ['late', 'Late'] } },
     'late-reopen': {
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE),
+        myCheckin: { at: '2026-09-21T03:42:00.000Z', atText: '11:42' },
+        groups: GROUPS, profile: { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } })] },
+      expect: { state: 'checked-in', text: ['You’re on the list', 'Check-in closes at 12:30.'], notText: ['late', 'Late'], calls: ['status'] } },
+    'late-reopen-older-server': {
       api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE),
         myCheckin: { at: '2026-09-21T03:42:00.000Z', atText: '11:42', late: true, minutesLate: 12 },
         groups: GROUPS, profile: { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } })] },
-      expect: { state: 'checked-in', text: ['marked late', 'Late · 12 min'], calls: ['status'] } },
-    'late-stamp-large-text': { fontScale: 1.3, location: { lm: GPS },
-      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(125)] },
-      expect: { state: 'checked-in', stampFits: true, text: ['Late · 2h 5m', 'You checked in 2 hours 5 minutes after'] } },
-    'late-stamp-longest': { fontScale: 1.3, location: { lm: GPS },
-      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(719)] },
-      expect: { state: 'checked-in', stampFits: true, text: ['Late · 11h 59m', '11 hours 59 minutes after'] } },
-    'late-stamp-whole-hour': { location: { lm: GPS },
-      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(60)] },
-      expect: { state: 'checked-in', stampFits: true, text: ['Late · 1h', 'You checked in 1 hour after'], notText: ['0m', '60 min'] } },
-    'late-stamp-compact-large-text': { fontScale: 1.3, location: { lm: GPS },
-      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(125, null)] },
-      expect: { state: 'profile', stampFits: true, text: ['marked late'], notText: ['125 min'] } },
+      expect: { state: 'checked-in', text: ['You’re on the list'], notText: ['late', 'Late'], calls: ['status'] } },
+    'late-member-too-far': { location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })],
+        checkin: [{ ok: false, code: 'OUT_OF_RANGE', message: 'You are too far.', data: { beyondM: 500, radiusM: 150 } }] },
+      expect: { state: 'failed', text: ['Open until 12:30'], notText: ['late', 'Late'] } },
+    'compact-stamp-large-text-late-window': { fontScale: 1.3, location: { lm: GPS },
+      api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE) })], checkin: [lateCheckedIn(null)] },
+      expect: { state: 'profile', stampFits: true, notText: ['late', 'Late'] } },
     // Another admin's check-in is in its late window: any admin can start the next one, which ends it.
     'admin-late-start-new': { confirm: true, location: { lm: GPS },
       api: { status: [status({ isAdmin: true, sessionMinutes: 30, lateMinutes: 60,
@@ -680,8 +722,8 @@
     'admin-late-checked-in': {
       api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }),
         myCheckin: { at: '2026-09-21T02:31:00.000Z', atText: '10:31' }, groups: [], profile: { rank: 'LTA', fullName: 'Ada Admin', group: '' } })] },
-      expect: { state: 'checked-in', buttons: ['Done', 'Start a new check-in', 'Check-in settings'], notText: ['marked late'],
-        text: ['You checked in on time. Late check-ins are open until 12:30.'] } },
+      expect: { state: 'checked-in', buttons: ['Done', 'Start a new check-in', 'Check-in settings'], notText: ['marked late', 'on time', 'minute'],
+        title: 'You’re on the list', line: 'Late check-ins are open until 12:30.' } },
     'admin-idle-late-window': { confirm: false,
       api: { status: [status({ isAdmin: true, sessionMinutes: 30, lateMinutes: 60 })] },
       steps: [{ waitState: 'admin-idle', text: ['for the next 30 minutes, then late for 60 more.'] }, { click: 'Start check-in (30 min)' }],
@@ -708,7 +750,7 @@
       steps: [{ click: 'Check-in settings' }, { waitState: 'settings' }, { fill: ['#set-radius', '300'] }, { click: 'Save' }, { pause: 200 }],
       expect: { state: 'settings', text: ['Still saving. If lots of people are checking in, this can take up to a minute.'], lineHidden: false, waitMs: 5000 } },
     'admin-settings-late': { api: { status: [status({ isAdmin: true, lateMinutes: 60 })], saveSettings: [SETTINGS_SAVED(60, 150, 100, 0)] },
-      steps: [{ click: 'Check-in settings' }, { waitState: 'settings', text: ['Then late check‑ins are accepted for', 'more minutes', 'Enter 0 for none.'] },
+      steps: [{ click: 'Check-in settings' }, { waitState: 'settings', text: ['Then late check‑ins are accepted for', 'more minutes', 'Marked late in the Sheet only. Enter 0 for none.'] },
         { fill: ['#set-late', '0'] }, { click: 'Save' }],
       expect: { state: 'admin-idle', text: ['for the next 60 minutes.'], notText: ['then late'], sentSettings: { lateMinutes: 0 } } },
     'admin-settings-late-during-session': {
@@ -758,14 +800,14 @@
     'admin-late-too-far': { location: { lm: GPS },
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'Bo Admin' }) })],
         checkin: [{ ok: false, code: 'OUT_OF_RANGE', message: 'You are 2000 m from the check-in point.', data: { distanceM: 2000, radiusM: 150 } }] },
-      steps: [{ click: 'Check in late' }],
+      steps: [{ click: 'Check in' }],
       expect: { state: 'failed', text: ['You’re 2 km from Bo Admin’s check\u2011in point. To take attendance here, start a new check\u2011in, which ends their late check\u2011ins.'],
         buttons: ['Try again', 'Start a new check-in'] } },
     // A long name is never cut on screen; the popup shortens it at a word.
     'admin-late-long-starter-name': { confirm: false, location: { lm: GPS },
       api: { status: [status({ isAdmin: true, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: false, startedByName: 'SLTC Maximilian-Alexander Wolfeschlegelsteinhausen' }) })],
         checkin: [{ ok: false, code: 'OUT_OF_RANGE', message: 'You are 2000 m from the check-in point.', data: { distanceM: 2000, radiusM: 150 } }] },
-      steps: [{ click: 'Check in late' }, { waitState: 'failed', text: ['from SLTC Maximilian-Alexander Wolfeschlegelsteinhausen’s check\u2011in point'] }, { click: 'Start a new check-in' }, { pause: 400 }],
+      steps: [{ click: 'Check in' }, { waitState: 'failed', text: ['from SLTC Maximilian-Alexander Wolfeschlegelsteinhausen’s check\u2011in point'] }, { click: 'Start a new check-in' }, { pause: 400 }],
       expect: { state: 'failed', confirmed: ['This ends late check-ins for SLTC Maximilian-Alexander…’s check-in. Start a 60-minute check-in here? Members will need to be within 150 m of where you’re standing. Once started, it can’t be ended early.'] } },
     'admin-settings-minutes-in-late-window': {
       api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }),
@@ -775,9 +817,9 @@
       expect: { state: 'checked-in', text: ['Saved. This check-in takes late check-ins until 12:30; the next one will stay open 1\u00a0minute.'] } },
     'late-member-on-time-reopens': {
       api: { status: [status({ activeSession: Object.assign({}, MEMBER_SESSION, LATE),
-        myCheckin: { at: '2026-09-21T02:45:00.000Z', atText: '10:45', late: false, minutesLate: 0 },
+        myCheckin: { at: '2026-09-21T02:45:00.000Z', atText: '10:45' },
         groups: GROUPS, profile: { rank: 'CPL', fullName: 'Cy Tan', group: 'Bravo' } })] },
-      expect: { state: 'checked-in', text: ['You checked in on time, before 11:30.'], notText: ['marked late', 'Late check-ins are open'] } },
+      expect: { state: 'checked-in', text: ['Check-in closes at 12:30.'], notText: ['late', 'Late'] } },
 
     // ---------- review fixes, round 2 ----------
     'admin-late-new-own-ended': { confirm: true, location: { lm: GPS },
@@ -796,7 +838,7 @@
     'admin-late-own-too-far': { location: { lm: GPS },
       api: { status: [status({ isAdmin: true, lateMinutes: 60, activeSession: Object.assign({}, SESSION, LATE, { startedByMe: true }) })],
         checkin: [{ ok: false, code: 'OUT_OF_RANGE', message: 'You are 420 m from the check-in point.', data: { distanceM: 420, radiusM: 150 } }] },
-      steps: [{ click: 'Check in late' }],
+      steps: [{ click: 'Check in' }],
       expect: { state: 'failed', buttons: ['Try again', 'Start a new check-in', 'Check-in settings'],
         text: ['You’re 420 m from your check\u2011in point. To take attendance here, start a new check\u2011in, which ends late check\u2011ins for this one.'] } },
     'admin-low-accuracy-opens-at-accuracy': { location: { lm: GPS },

@@ -64,7 +64,7 @@ function describeSendError_(res) {
 /**
  * Time-driven trigger (every 5 minutes, installed by setup()). Keeps checkin_count, each open
  * session's tab and the Nominal Roll current (check-ins write none of them). When a session's
- * on-time window ends it is marked late and the live message says so (keeping its button); when
+ * on-time window ends it is marked late and the live message says it's still open (keeping its button); when
  * its late window ends it is marked closed with the final count and list, its check-in point is
  * deleted, and the live message becomes the result, broken down by group.
  */
@@ -167,9 +167,9 @@ function closeExpiredSessions_() {
   }
   if (!CONFIG_CHECKS_.GROUP_CHAT_ID(cfg)) return;
   if (done.lateMessage) {
-    // The same message, now saying the on-time window has closed; its button stays for late check-ins.
+    // The same message, now saying check-in is still open (until the late window ends); its button stays.
     const m = done.lateMessage;
-    const edited = editText_(botToken_(), m.chatId, m.messageId, lateText_(done.nowLate), checkinKeyboard_(cfg, true));
+    const edited = editText_(botToken_(), m.chatId, m.messageId, stillOpenText_(done.nowLate), checkinKeyboard_(cfg, true));
     if (!edited.ok) console.warn('Could not edit the live message for the late window: ' + edited.description);
   }
   if (!done.recent) return;
@@ -191,7 +191,7 @@ function closeExpiredSessions_() {
  */
 function tallyLog_(sessionIds) {
   const tally = {};
-  sessionIds.forEach((id) => { tally[id] = { count: 0, late: 0, groups: {}, people: [] }; });
+  sessionIds.forEach((id) => { tally[id] = { count: 0, groups: {}, people: [] }; });
   const sheet = sheet_(SHEETS_.LOG);
   const last = sheet.getLastRow();
   if (last < 1) return tally;
@@ -204,7 +204,6 @@ function tallyLog_(sessionIds) {
     const group = String(r[LOG_COL_.GROUP - 1]).trim();
     const minutesLate = Number(r[LOG_COL_.MINUTES_LATE - 1]) || 0;
     t.count++;
-    if (minutesLate) t.late++;
     t.groups[group] = (t.groups[group] || 0) + 1;
     t.people.push({
       rank: String(r[LOG_COL_.RANK - 1]).trim(),
@@ -222,13 +221,14 @@ function tallyLog_(sessionIds) {
 }
 
 /**
- * "Check-in closed at 11:02 · 23 checked in (4 late)" plus a line per group, in the Groups tab's
- * order. It closes when its late window ends (or a new check-in ended it early).
+ * "Check-in closed at 11:02 · 23 checked in" plus a line per group, in the Groups tab's order. It
+ * closes when its late window ends (or a new check-in ended it early). How many were late is left
+ * to the check-in's tab: this goes to the whole group.
  */
 function closedText_(session, groupOrder) {
   const t = session.tally;
   const head = 'Check-in closed at ' + hhmm_(session.lateUntil) + ' · ' +
-    (t.count ? t.count + ' checked in' + (t.late ? ' (' + t.late + ' late)' : '') : 'nobody checked in');
+    (t.count ? t.count + ' checked in' : 'nobody checked in');
   const parts = groupBreakdown_(t.groups, groupOrder);
   return parts.length ? head + '\n' + parts.join(' · ') : head;
 }

@@ -13,6 +13,7 @@ const SESSION_TAB_COLUMNS_ = ['Group', 'Rank', 'Full name', 'Checked in at', 'La
 const SESSION_TAB_HEAD_ROWS_ = 5; // title, count, status, blank, column names
 const TAB_PENDING_PREFIX_ = 'TAB_PENDING:';
 const TAB_PENDING_GIVE_UP_MS_ = 24 * 60 * 60 * 1000;
+const NOT_ON_ROLL_COLOUR_ = '#fce5cd'; // Sheets' light orange: checked in, but the name isn't on the Nominal Roll
 
 /**
  * Call with the script lock held. Marks the sessions closing now as needing their final tab, and
@@ -100,9 +101,13 @@ function writeSessionTab_(sheet, session, people, groupOrder, final, roll) {
   const closes = hhmm_(session.closesAt);
   const lateUntil = hhmm_(session.lateUntil);
   const late = unique.filter((p) => p.minutesLate).length;
+  // A name that doesn't match the roll never stops a check-in; it is flagged here, and only here.
+  const onRoll = unique.map((p) => (roll ? !!roll.keySet[nameKey_(p.fullName)] : null));
+  const offRoll = onRoll.filter((x) => x === false).length;
   const breakdown = groupBreakdown_(counts, groupOrder);
   const summary = unique.length
-    ? unique.length + ' checked in' + (late ? ' (' + late + ' late)' : '') + (breakdown.length ? ' · ' + breakdown.join(' · ') : '')
+    ? unique.length + ' checked in' + (late ? ' (' + late + ' late)' : '') + (breakdown.length ? ' · ' + breakdown.join(' · ') : '') +
+      (offRoll ? ' · ' + offRoll + ' not on the nominal roll' : '')
     : (final ? 'Nobody checked in.' : 'Nobody has checked in yet.');
   let status;
   if (final) {
@@ -121,7 +126,7 @@ function writeSessionTab_(sheet, session, people, groupOrder, final, roll) {
   const width = SESSION_TAB_COLUMNS_.length;
   const line = (text) => [text].concat(Array(width - 1).fill(''));
   const block = [line(title), line(summary), line(status), line(''), SESSION_TAB_COLUMNS_.slice()]
-    .concat(unique.map((p) => [
+    .concat(unique.map((p, i) => [
       groupCell_(p.group),
       textCell_(p.rank),
       textCell_(p.fullName),
@@ -130,7 +135,7 @@ function writeSessionTab_(sheet, session, people, groupOrder, final, roll) {
       textCell_([p.firstName, p.lastName].filter(Boolean).join(' ')),
       // Telegram usernames are letters, digits and _ only, so "@name" can't be read as a formula.
       /^\w+$/.test(p.username) ? "'@" + p.username : textCell_(p.username),
-      roll ? (roll.keySet[nameKey_(p.fullName)] ? 'Yes' : 'No') : '',
+      onRoll[i] === null ? '' : onRoll[i] ? 'Yes' : 'No',
     ]));
 
   // Exactly as many rows as needed, plus one (Sheets keeps at least one row below the frozen ones).
@@ -141,4 +146,7 @@ function writeSessionTab_(sheet, session, people, groupOrder, final, roll) {
   sheet.clearContents();
   sheet.getRange(1, 1, block.length, width).setValues(block);
   if (unique.length) sheet.getRange(SESSION_TAB_HEAD_ROWS_ + 1, 4, unique.length, 1).setNumberFormat('HH:mm');
+  // Every list row and the spare one below, so a flag never stays on a row whose person moved.
+  sheet.getRange(SESSION_TAB_HEAD_ROWS_ + 1, width, unique.length + 1, 1)
+    .setBackgrounds(onRoll.map((x) => [x === false ? NOT_ON_ROLL_COLOUR_ : null]).concat([[null]]));
 }

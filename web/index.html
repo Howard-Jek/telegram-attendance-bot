@@ -181,9 +181,6 @@
      sized in the stamp's own em, so the label keeps clear of the ring's curve at any text size. */
   .stamp.is-compact { gap: 0; font-size: var(--t-stamp-compact); width: 4.5em; height: 4.5em; }
   .stamp.is-compact .stamp-label { font-size: 0.4em; }
-  /* A late check-in: the same stamp, with how late along its bottom edge. */
-  .stamp-late { margin-top: var(--s1); }
-  .stamp.is-compact .stamp-late { margin-top: 0; }
   .stamp-time { font-size: 1em; font-weight: 800; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
 
   /* Group and name, asked once under the stamp. */
@@ -412,7 +409,7 @@
   var denials = 0;         // location refusals in a row
   var settingsOpened = false;
   var flow = 'checkin';    // what a location screen's Try again repeats: 'checkin', 'start' or 'move'
-  var lastCheckin = null;  // {atText, closesAtText} of this person's check-in
+  var lastCheckin = null;  // {atText, closesAtText, openUntilText} of this person's check-in (openUntilText: when check-in closes, for the checked-in line)
   var me = null;           // {groups, profile} from the server once checked in (null: not offered)
   var picking = false;     // the group/name picker is open by choice ("Change")
   var savingProfile = false;
@@ -449,23 +446,19 @@
     return windowText(s) + (s.late ? '\nStarted by ' : '\u00a0· started by ') + who;
   }
 
-  // "Open until 11:30", or once on time is over, "On time until 11:30, late until 12:30".
+  // "Open until 11:30". Once on time is over, admins see "On time until 11:30, late until 12:30";
+  // members just see when check-in closes. (The owner, 2026-10-19: people checking in late are
+  // just told they're checked in; only the Sheet marks them late.)
   function windowText(s) {
-    return s.late ? 'On time until ' + s.closesAtText + ', late\u00a0until ' + s.lateUntilText : 'Open until ' + s.closesAtText;
+    if (!s.late) return 'Open until ' + s.closesAtText;
+    return status && status.isAdmin ? 'On time until ' + s.closesAtText + ', late\u00a0until ' + s.lateUntilText
+      : 'Open until ' + s.lateUntilText;
   }
 
   function minutes(n) {
     return n + (n === 1 ? ' minute' : ' minutes');
   }
 
-  // "12 minutes", "1 hour", "2 hours 5 minutes"; short (for the stamp): "12 min", "1h", "2h 5m".
-  function duration(n, short) {
-    var h = Math.floor(n / 60);
-    var m = n % 60;
-    if (!h) return short ? n + ' min' : minutes(n);
-    if (short) return h + 'h' + (m ? ' ' + m + 'm' : '');
-    return h + (h === 1 ? ' hour' : ' hours') + (m ? ' ' + minutes(m) : '');
-  }
 
   // During another check-in's late window, any admin may start the next one (which ends that window).
   function withNewStart(actions) {
@@ -574,31 +567,29 @@
     },
     ready: function (line) {
       var s = status && status.activeSession;
-      var late = !!(s && s.late);
+      var late = lateWindowAdmin(); // members aren't told on time is over
       var view = { state: late ? 'ready-late' : 'ready', icon: late ? 'clock' : 'pin',
         title: late ? 'On\u2011time check\u2011in has closed' : 'Check-in is open',
-        line: line || (late ? 'You can still check in until ' + s.lateUntilText + '. It will be marked late.'
+        line: line || (late ? 'You can still check in until ' + s.lateUntilText + '. Only the Sheet marks it late.'
           : 'Tap Check in when you’re at the venue.'),
         meta: line && s ? windowText(s) : sessionMeta(), // the line already names the starter
         hint: takeSaved() };
-      view.actions = withSettings(withNewStart([{ label: late ? 'Check in late' : 'Check in', primary: true, onClick: checkIn }]), function () {
+      view.actions = withSettings(withNewStart([{ label: 'Check in', primary: true, onClick: checkIn }]), function () {
         view.hint = ''; // "Saved" is said once
         render(view);
       });
       return view;
     },
     // After the stamp: the group picker (first time, or on Change), else the saved group as a pill.
+    // On time or late, it reads the same: whether it was late is for the Sheet only.
     checkedIn: function (atText, closesAtText, isNew) {
       var s = status && status.activeSession;
       var asking = picking || profileNeeded();
-      var late = lastCheckin && lastCheckin.late;
+      var until = (lastCheckin && lastCheckin.openUntilText) || closesAtText;
       var view = { state: asking ? 'profile' : 'checked-in', stamp: atText, stampIsNew: isNew, stampCompact: asking,
-        stampLate: late ? 'Late · ' + duration(lastCheckin.minutesLate, true) : '',
-        title: late ? 'You’re on\u00a0the\u00a0list, marked late' : 'You’re on the list',
-        line: late ? 'You checked in ' + duration(lastCheckin.minutesLate) + ' after the on-time check-in closed at ' + closesAtText + '.'
-          : s && s.late ? (status.isAdmin ? 'You checked in on time. Late check-ins are open until ' + s.lateUntilText + '.'
-            : 'You checked in on time, before ' + closesAtText + '.')
-            : 'Check-in closes at ' + closesAtText + '.',
+        title: 'You’re on the list',
+        line: status && status.isAdmin && s && s.late ? 'Late check-ins are open until ' + s.lateUntilText + '.'
+          : 'Check-in closes at ' + until + '.',
         meta: !asking && status && status.isAdmin && s && s.startedByName && !s.startedByMe ? 'Started by ' + s.startedByName : '' };
       if (justMoved) {
         view.hint = 'The check-in point is now where you’re standing.';
@@ -812,8 +803,8 @@
       var s = status.activeSession;
       if (!s) return render(status.isAdmin ? views.adminIdle() : views.noSession());
       if (status.myCheckin) {
-        rememberCheckin({ atText: status.myCheckin.atText, closesAtText: s.closesAtText, late: status.myCheckin.late,
-          minutesLate: status.myCheckin.minutesLate, groups: status.groups, profile: status.profile });
+        rememberCheckin({ atText: status.myCheckin.atText, closesAtText: s.closesAtText,
+          openUntilText: s.late ? s.lateUntilText : s.closesAtText, groups: status.groups, profile: status.profile });
         return render(views.checkedIn(status.myCheckin.atText, s.closesAtText, false));
       }
       // The group tap should be the only tap: try straight away. Not for an admin once on time is over:
@@ -1004,8 +995,8 @@
     return api('checkin', { location: sendable(fix) }).then(function (res) {
       if (res.code === 'CHECKED_IN' || res.code === 'ALREADY_CHECKED_IN') {
         working = false;
-        haptic(res.data.late ? 'warning' : 'success');
-        status.myCheckin = { at: res.data.at, atText: res.data.atText, late: res.data.late, minutesLate: res.data.minutesLate };
+        haptic('success');
+        status.myCheckin = { at: res.data.at, atText: res.data.atText };
         rememberCheckin(res.data);
         return showCheckedIn(true);
       }
@@ -1028,9 +1019,10 @@
           var d = st.ok && st.data;
           if (d && d.myCheckin && d.activeSession) {
             status = d;
-            rememberCheckin({ atText: d.myCheckin.atText, closesAtText: d.activeSession.closesAtText, late: d.myCheckin.late,
-              minutesLate: d.myCheckin.minutesLate, groups: d.groups, profile: d.profile });
-            haptic(d.myCheckin.late ? 'warning' : 'success');
+            rememberCheckin({ atText: d.myCheckin.atText, closesAtText: d.activeSession.closesAtText,
+              openUntilText: d.activeSession.late ? d.activeSession.lateUntilText : d.activeSession.closesAtText,
+              groups: d.groups, profile: d.profile });
+            haptic('success');
             return showCheckedIn(true);
           }
           fail(res, checkIn, 'checkin');
@@ -1076,9 +1068,17 @@
   }
 
   function rememberCheckin(data) {
-    lastCheckin = { atText: data.atText, closesAtText: data.closesAtText, late: !!data.late, minutesLate: data.minutesLate || 0 };
+    lastCheckin = { atText: data.atText, closesAtText: data.closesAtText, openUntilText: openUntil(data) };
     // A server without groups support sends no list; then nothing is asked.
     if (Array.isArray(data.groups)) me = { groups: data.groups, profile: data.profile || null };
+  }
+
+  // When check-in closes, as of this check-in. The server says; one from before 2026-10-19 sends
+  // whether it was late instead (used only to pick the time, never shown).
+  function openUntil(data) {
+    if (data.openUntilText) return data.openUntilText;
+    var s = status && status.activeSession;
+    return (data.late || (s && s.late)) && data.lateUntilText ? data.lateUntilText : data.closesAtText;
   }
 
   function showCheckedIn(isNew) {
@@ -1294,7 +1294,7 @@
   var SETTINGS = [
     { name: 'sessionMinutes', id: 'set-minutes', min: 1, max: 720, label: 'How long a check\u2011in stays open', unit: 'minutes' },
     { name: 'lateMinutes', id: 'set-late', min: 0, max: 720, label: 'Then late check\u2011ins are accepted for', unit: 'more minutes',
-      help: 'Check-ins in this time are marked late. Enter 0 for none.' },
+      help: 'Marked late in the Sheet only. Enter 0 for none.' },
     { name: 'radiusM', id: 'set-radius', min: 10, max: 5000, label: 'How close members must be to the check\u2011in point', unit: 'm' }, // "check-in" never splits
     { name: 'maxAccuracyM', id: 'set-accuracy', min: 10, max: 500, label: 'Location must be accurate to within', unit: 'm',
       help: 'A higher number lets more phones through. Raise it if members indoors are told their location isn’t precise enough.' },
@@ -1893,13 +1893,11 @@
     return mark;
   }
 
-  function stampEl(atText, isNew, compact, late) {
+  function stampEl(atText, isNew, compact) {
     var stamp = el('div', 'stamp' + (isNew ? ' is-new' : '') + (compact ? ' is-compact' : ''));
     stamp.setAttribute('aria-hidden', 'true'); // announced through the title
     stamp.appendChild(el('span', 'stamp-label', 'Checked in'));
     stamp.appendChild(el('span', 'stamp-time', atText));
-    // Beside the profile questions the stamp is smaller: just "Late" (how late is said after saving).
-    if (late) stamp.appendChild(el('span', 'stamp-label stamp-late', compact ? 'Late' : late));
     return stamp;
   }
 
@@ -1935,7 +1933,7 @@
     current = view.state;
     document.body.setAttribute('data-state', view.state);
     clear(screenEl);
-    if (view.stamp) screenEl.appendChild(stampEl(view.stamp, view.stampIsNew, view.stampCompact, view.stampLate));
+    if (view.stamp) screenEl.appendChild(stampEl(view.stamp, view.stampIsNew, view.stampCompact));
     else if (!view.noMark) screenEl.appendChild(markEl(view));
     if (view.outcome) {
       var outcome = el('p', 'outcome' + (view.outcomeUnknown ? ' is-unknown' : ''), view.outcome);

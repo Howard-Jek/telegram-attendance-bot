@@ -49,7 +49,9 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
    change any of them. Anyone who saved "CPL Tan Wei Ming" in one box before rank had its own is
    asked once more, with the two boxes already filled in.
 4. **Late?** After the on-time window, check-ins are still accepted for the late window (60
-   minutes unless an admin changed it). You're on the list, marked late, with how many minutes.
+   minutes unless an admin changed it). It reads exactly like an on-time check-in: "You're on the
+   list". Only the Sheet marks it late (the Log, the check-in's tab and the Nominal Roll); nothing
+   in the app or the group says so.
 
 **Admins** are the group's Telegram admins, plus anyone listed in `ADMIN_IDS`.
 
@@ -58,11 +60,11 @@ Telegram group ──/checkin──▶ Apps Script webhook ──▶ posts one "
 3. The bot posts "📍 Check-in is open until HH:mm" in the group, with the button.
 4. If you started in the wrong place, open the app at the venue. When it says you're too far,
    tap **Move check-in point here**.
-5. When the on-time window ends, the bot edits its message to "⏰ On-time check-in closed at
-   08:30. Still on the way? Tap the button by 09:30 to check in late." The button stays.
+5. When the on-time window ends, the bot edits its message to "📍 Check-in is still open until
+   09:30. Tap the button when you arrive." The button stays.
 6. When the late window ends, the message becomes the result, for example "Check-in closed at
-   09:30 · 27 checked in (4 late)", with a line of counts per group. Each of these happens within
-   5 minutes.
+   09:30 · 27 checked in", with a line of counts per group. How many were late is on the
+   check-in's tab, not in the group. Each of these happens within 5 minutes.
 7. During another check-in's late window, any admin can **Start a new check-in**. That ends the
    late window there and then; anyone arriving afterwards checks in to the new one.
 
@@ -77,8 +79,8 @@ change them in the Config tab (and the check-in point on the Sessions tab), for 
 started one in the wrong place and left.
 
 - **How long check-in stays open**, 1–720 minutes. This applies from the next session.
-- **How long late check-ins are accepted after that**, 0–720 minutes (0 turns them off). This
-  also applies from the next session.
+- **How long late check-ins are accepted after that**, 0–720 minutes (0 turns them off). They're
+  marked late in the Sheet only. This also applies from the next session.
 - **How close members must be**, 10–5000 m. This applies straight away, including to a
   session that's already open.
 - **How accurate a location must be**, 10–500 m. This also applies straight away. A higher
@@ -123,8 +125,10 @@ edit them there.
 **Matching names to the Nominal Roll.** A member's full name matches a roll row when the same
 words appear, ignoring capitals, punctuation, extra spaces and word order, and a rank typed in front
 of the name. So "Marcus Chen Feng" matches "CHEN FENG, MARCUS", but "Tan Wei Meng" doesn't match
-"Tan Wei Ming". On a check-in's tab, **On nominal roll: No** shows who checked in under a name the
-roll doesn't have; correct the name on the Members tab (or on the roll) and the next update, within
+"Tan Wei Ming". A name that doesn't match never stops anyone checking in, and
+the member isn't told. On a check-in's tab, **On nominal roll: No** (highlighted orange, and counted
+at the top, e.g. "· 3 not on the nominal roll") shows who checked in under a name the roll doesn't
+have; their roll row stays red. Correct the name on the Members tab (or on the roll) and the next update, within
 5 minutes, picks it up, as long as the check-in (late window included) is still open. Once it has
 closed, its tab and the roll are final: fix a past check-in on its tab or the Log by hand.
 
@@ -179,7 +183,7 @@ fast:
 | `RADIUS_M` | 150 | How close to the check-in point members must be, in metres. Admins can change it in the app. |
 | `MAX_ACCURACY_M` | 100 | The roughest GPS fix accepted, in metres. This also applies to the admin who sets the point. Admins can change it in the app. |
 | `SESSION_MINUTES` | 60 | How long a session stays open. Admins can change it in the app. |
-| `LATE_MINUTES` | 60 | How long late check-ins are accepted after that, marked late; 0 for none. Admins can change it in the app. |
+| `LATE_MINUTES` | 60 | How long late check-ins are accepted after that, marked late in the Sheet only; 0 for none. Admins can change it in the app. |
 | `INITDATA_MAX_AGE_MIN` | 15 | How long an opened Mini App stays valid before members must reopen it |
 | `ADMIN_IDS` | *(blank)* | Optional. Comma-separated Telegram user IDs that may start sessions without being group admins. |
 
@@ -337,6 +341,12 @@ import them) need checking. Until `setup()` has run, the app says "The bot was u
 **The late check-ins and Nominal Roll update** needs `setup()` once more: it adds `late_until`
 to Sessions, `rank` and `minutes_late` to Log, `rank` to Members, and `LATE_MINUTES` to Config.
 Nothing moves. Until it has run, the app says "The bot was updated".
+
+**The silent late check-ins update** needs no `setup()`. Deploy it between check-ins (no
+check-in open, late window included), ideally before the day's first one: a check-in already
+running keeps the old wording in its group message (an admin can send `/checkin` to repost it
+in the new words). Either order of the two halves is safe for members, but do the backend
+(`clasp push -f`, then `clasp update-deployment`) first and the Mini App (push to `main`) after.
 
 To move the bot to another group:
 

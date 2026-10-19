@@ -50,6 +50,16 @@
     var win = function () { return frame.contentWindow; };
     var state = function () { return doc().body && doc().body.getAttribute('data-state'); };
     var text = function () { return doc().getElementById('screen').textContent; };
+    // notText also covers what a screen reader hears (the live region) and the action bar's labels.
+    var heard = function () { return text() + ' ' + doc().getElementById('status').textContent + ' ' + buttons(doc()).join(' '); };
+    var titleText = function () {
+      var t = doc().querySelector('#screen .title');
+      if (!t) return null;
+      var copy = t.cloneNode(true);
+      Array.prototype.forEach.call(copy.querySelectorAll('.visually-hidden'), function (n) { n.remove(); });
+      return copy.textContent;
+    };
+    var lineText = function () { var l = doc().querySelector('#screen .line'); return l ? l.textContent : null; };
 
     for (var i = 0; i < (sc.steps || []).length; i++) {
       var step = sc.steps[i];
@@ -58,7 +68,7 @@
         break;
       }
       (step.text || []).forEach(function (t) { if (text().indexOf(t) === -1) errors.push('step text missing: ' + t); });
-      (step.notText || []).forEach(function (t) { if (text().indexOf(t) !== -1) errors.push('step unexpected text: ' + t); });
+      (step.notText || []).forEach(function (t) { if (heard().indexOf(t) !== -1) errors.push('step unexpected text: ' + t); });
       if (step.waitText && !(await until(function () { return step.waitText.every(function (t) { return text().indexOf(t) !== -1; }); }, 8000))) {
         errors.push('never showed ' + JSON.stringify(step.waitText) + ' (at ' + state() + ')');
         break;
@@ -115,7 +125,9 @@
     if (!errors.length) {
       var log = win().__mini;
       (e.text || []).forEach(function (t) { if (text().indexOf(t) === -1) errors.push('text missing: ' + t); });
-      (e.notText || []).forEach(function (t) { if (text().indexOf(t) !== -1) errors.push('unexpected text: ' + t); });
+      (e.notText || []).forEach(function (t) { if (heard().indexOf(t) !== -1) errors.push('unexpected text: ' + t); });
+      if (e.title !== undefined && titleText() !== e.title) errors.push('title ' + JSON.stringify(titleText()));
+      if (e.line !== undefined && lineText() !== e.line) errors.push('line ' + JSON.stringify(lineText()));
       if (e.buttons && JSON.stringify(buttons(doc())) !== JSON.stringify(e.buttons)) errors.push('buttons ' + JSON.stringify(buttons(doc())));
       (e.notButtons || []).forEach(function (b) { if (buttons(doc()).indexOf(b) !== -1) errors.push('unexpected button ' + b); });
       if (e.calls) {
@@ -134,18 +146,17 @@
       if (e.openedLinks && JSON.stringify(log.openedLinks) !== JSON.stringify(e.openedLinks)) errors.push('links ' + JSON.stringify(log.openedLinks));
       if (e.stampFits) {
         var st = doc().querySelector('.stamp'), tm = doc().querySelector('.stamp-time'), lb = doc().querySelector('.stamp-label');
-        var lateLb = doc().querySelector('.stamp-late');
         var cs = function (n) { return win().getComputedStyle(n); };
         // Layout size, not the on-screen box: the stamp's press-in animation scales it.
         if (tm.offsetHeight > parseFloat(cs(tm).fontSize) * 1.5) errors.push('stamp time wraps');
         // Every corner of the label and the time must sit inside the inner ring (inset 8px, 1px line).
         var c = st.clientWidth / 2, r = c - 9;
-        [lb, tm].concat(lateLb ? [lateLb] : []).forEach(function (n) {
+        [lb, tm].forEach(function (n) {
           var half = parseFloat(cs(n).fontSize) * 0.375; // glyph height, not the line box
           var mid = n.offsetTop + n.offsetHeight / 2;
           [[n.offsetLeft, mid - half], [n.offsetLeft + n.offsetWidth, mid - half],
             [n.offsetLeft, mid + half], [n.offsetLeft + n.offsetWidth, mid + half]].forEach(function (pt) {
-            if (Math.hypot(pt[0] - c, pt[1] - c) > r) errors.push((n === lb ? 'label' : n === lateLb ? 'late label' : 'time') + ' crosses the ring');
+            if (Math.hypot(pt[0] - c, pt[1] - c) > r) errors.push((n === lb ? 'label' : 'time') + ' crosses the ring');
           });
         });
       }
@@ -219,6 +230,7 @@
         var bar = doc().getElementById('actions').getBoundingClientRect();
         if (!r || r.top < 0 || r.bottom > bar.top) errors.push(e.inView + ' not in view (' + (r && Math.round(r.top)) + '-' + (r && Math.round(r.bottom)) + ', bar at ' + Math.round(bar.top) + ')');
       }
+      if (e.haptics && JSON.stringify(log.haptics) !== JSON.stringify(e.haptics)) errors.push('haptics ' + JSON.stringify(log.haptics));
       if (e.peeks) {
         // The field's label shows above the bar (and its fade), so it reads as "more below".
         var field = doc().getElementById(e.peeks).closest('.field').getBoundingClientRect();

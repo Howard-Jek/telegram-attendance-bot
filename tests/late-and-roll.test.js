@@ -3,6 +3,9 @@
  * Owner requests of 2026-10-15: late check-ins (accepted for LATE_MINUTES after the on-time window,
  * marked late; a new check-in ends the late window early), rank and full name saved separately,
  * and a Nominal Roll tab coloured by the latest check-in.
+ * 2026-10-19: "i dont want to penalise the people checking-in late just say checked in when
+ * confirmed and silently mark them late in the google sheet". Members, and the group, are never
+ * told who is late: only the Log, the check-in's tab and the Nominal Roll say it.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,19 +19,27 @@ const MEMBER3 = { id: 666666, first_name: 'Fa', last_name: 'Lim', username: 'fa'
 
 // ---------- late check-ins ----------
 
-test('late: after the on-time window, check-ins are accepted for LATE_MINUTES more, marked late', () => {
+// The answer a member gets says nothing about being late; only the Log does.
+const assertSilent = (data, label) => {
+  assert.ok(!('late' in data) && !('minutesLate' in data), label + ': no late flag or minutes late in ' + JSON.stringify(data));
+};
+
+test('late: after the on-time window, check-ins are accepted for LATE_MINUTES more, marked late in the Log only', () => {
   const env = lateSetup();
   env.start(ADMIN);
   at(env, 30);
   const onTime = env.checkin(MEMBER);
   assert.equal(onTime.code, 'CHECKED_IN');
-  assert.equal(onTime.data.late, false);
+  assert.equal(onTime.message, 'Checked in at 11:00.');
+  assert.equal(onTime.data.openUntilText, '11:30');
+  assertSilent(onTime.data, 'on time');
   at(env, 72);
   const late = env.checkin(MEMBER2);
   assert.equal(late.code, 'CHECKED_IN');
-  assert.equal(late.data.late, true);
-  assert.equal(late.data.minutesLate, 12);
-  assert.equal(late.data.lateUntilText, '12:30');
+  assert.equal(late.message, 'Checked in at 11:42.', 'the same words as on time');
+  assert.equal(late.data.openUntilText, '12:30', 'check-in now closes at the end of the late window');
+  assert.equal(late.data.closesAtText, '12:30', 'an old copy of the app shows "Check-in closes at 12:30."');
+  assertSilent(late.data, 'late');
   assert.deepEqual(env.records('Log').map((r) => r.minutes_late), ['', 12]);
   at(env, 120);
   assert.equal(env.checkin(MEMBER3).code, 'NO_ACTIVE_SESSION');
@@ -38,30 +49,59 @@ test('late: checking in at the very moment it closes is late by 1 minute, never 
   const env = lateSetup();
   env.start(ADMIN);
   env.setNow(T0 + 60 * MIN);
-  const r = env.checkin(MEMBER);
-  assert.deepEqual([r.data.late, r.data.minutesLate], [true, 1]);
+  assert.equal(env.checkin(MEMBER).data.openUntilText, '12:30');
   env.setNow(T0 + 60 * MIN + 5000);
-  assert.equal(env.checkin(MEMBER2).data.minutesLate, 1);
+  env.checkin(MEMBER2);
+  assert.deepEqual(env.records('Log').map((r) => r.minutes_late), [1, 1]);
 });
 
-test('late: status gives the phase; repeat taps and reopening keep the late flag', () => {
+test('late: admins get the phase; members see one plain window, so no app (even an old copy) can say late', () => {
   const env = lateSetup();
   env.start(ADMIN);
   at(env, 50);
-  assert.equal(env.req('status', MEMBER).data.activeSession.late, false);
+  const before = env.req('status', MEMBER).data.activeSession;
+  assert.deepEqual([before.late, before.closesAtText], [false, '11:30'], 'on time: the time the group was told');
   at(env, 65);
   const s = env.req('status', MEMBER).data;
-  assert.equal(s.activeSession.late, true);
-  assert.equal(s.activeSession.closesAtText, '11:30');
-  assert.equal(s.activeSession.lateUntilText, '12:30');
-  assert.equal(s.lateMinutes, 60);
+  assert.deepEqual([s.activeSession.late, s.activeSession.closesAtText, s.activeSession.lateUntilText], [false, '12:30', '12:30']);
+  assert.equal(s.activeSession.closesAt, s.activeSession.lateUntil);
+  assert.doesNotMatch(JSON.stringify(s), /"late":true|minutesLate/);
+  const a = env.req('status', ADMIN2).data;
+  assert.deepEqual([a.activeSession.late, a.activeSession.closesAtText, a.activeSession.lateUntilText], [true, '11:30', '12:30']);
+  assert.equal(a.lateMinutes, 60);
   env.checkin(MEMBER);
   const again = env.checkin(MEMBER);
   assert.equal(again.code, 'ALREADY_CHECKED_IN');
-  assert.deepEqual([again.data.late, again.data.minutesLate], [true, 5]);
+  assertSilent(again.data, 'repeat tap');
   env.cache.clear(); // reopened later: the Log decides
   const mine = env.req('status', MEMBER).data.myCheckin;
-  assert.deepEqual([mine.late, mine.minutesLate], [true, 5]);
+  assert.deepEqual(Object.keys(mine).sort(), ['at', 'atText']);
+  assert.deepEqual(env.records('Log').map((r) => r.minutes_late), [5]);
+});
+
+test('late: an on-time check-in tapped again in the late window gives the time check-in now closes', () => {
+  const env = lateSetup();
+  env.start(ADMIN);
+  at(env, 20);
+  assert.equal(env.checkin(MEMBER).data.openUntilText, '11:30');
+  at(env, 70);
+  const again = env.checkin(MEMBER);
+  assert.equal(again.code, 'ALREADY_CHECKED_IN');
+  assert.equal(again.data.atText, '10:50');
+  assert.equal(again.data.openUntilText, '12:30');
+  env.cache.clear();
+  assert.equal(env.checkin(MEMBER).data.openUntilText, '12:30', 'the same when the Log answers');
+});
+
+test('late: admins get the same answer as members (the Sheet is where lateness shows)', () => {
+  const env = lateSetup();
+  env.start(ADMIN);
+  at(env, 75);
+  const r = env.checkin(ADMIN2);
+  assert.equal(r.message, 'Checked in at 11:45.');
+  assert.deepEqual([r.data.closesAtText, r.data.lateUntilText], ['11:30', '12:30'], 'admins keep the real window');
+  assertSilent(r.data, 'admin');
+  assertSilent(env.req('status', ADMIN2).data.myCheckin, 'admin status');
 });
 
 test('late: LATE_MINUTES 0 means no late window', () => {
@@ -100,7 +140,7 @@ test('late: a new check-in can start during the late window, and ends it', () =>
   at(env, 71);
   const r = env.checkin(MEMBER2);
   assert.equal(r.data.sessionId, next.data.sessionId);
-  assert.equal(r.data.late, false);
+  assert.equal(r.data.openUntilText, '12:40', 'on time for the new one');
   assert.equal(env.checkin(MEMBER).data.sessionId, next.data.sessionId, 'a fresh check-in for the new one');
 });
 
@@ -130,30 +170,33 @@ test('late: the check-in point and the copy of who checked in last through the l
   assert.equal(env.siteOf(id), null);
 });
 
-test('late: the group is told when on time ends, the button stays, and the result counts the late ones', () => {
-  const env = lateSetup();
+test('late: the group never hears the word late: on time ends quietly, the button stays, the result just counts', () => {
+  const env = lateSetup({ groups: ['Alpha'] });
   env.start(ADMIN);
   const open = env.visible()[0];
-  assert.match(open.text, /open until 11:30/);
-  assert.match(open.text, /marked late, until 12:30/);
+  assert.equal(open.text, '📍 Check-in is open until 11:30.\nTap the button when you arrive.');
   env.checkin(MEMBER);
   at(env, 60);
   close(env);
   assert.equal(env.records('Sessions')[0].status, 'late');
   const msg = env.visible()[0];
   assert.equal(msg.messageId, open.messageId, 'the same message, edited');
-  assert.match(msg.text, /On-time check-in closed at 11:30/);
-  assert.match(msg.text, /by 12:30 to check in late/);
+  assert.equal(msg.text, '📍 Check-in is still open until 12:30.\nTap the button when you arrive.');
   assert.equal(msg.buttons.length, 1, 'the button stays');
   at(env, 70);
   env.checkin(MEMBER2);
+  env.saveProfile(MEMBER2, 'Di Ong', 'Alpha', 'LCP');
   at(env, 120);
   close(env);
   const [s] = env.records('Sessions');
   assert.deepEqual([s.status, s.checkin_count], ['closed', 2]);
   const done = env.visible()[0];
-  assert.match(done.text, /^Check-in closed at 12:30 · 2 checked in \(1 late\)/);
+  assert.match(done.text, /^Check-in closed at 12:30 · 2 checked in\n/);
   assert.equal(done.buttons.length, 0);
+  const said = env.calls('sendMessage').concat(env.calls('editMessageText')).map((m) => m.text);
+  assert.ok(said.length >= 3);
+  said.forEach((text) => assert.doesNotMatch(text, /late/i, 'everything the bot posted or edited'));
+  assert.match(env.sheet('21 Sep 2026 1030').getRange(2, 1).getValue(), /2 checked in \(1 late\)/, 'the tab still counts them');
 });
 
 test('late: a check-in whose late window was ended by a new one gets its result posted', () => {
@@ -168,12 +211,12 @@ test('late: a check-in whose late window was ended by a new one gets its result 
   assert.ok(env.visible().some((m) => m.buttons.length && /open until 12:40/.test(m.text)), 'the new one keeps its button');
 });
 
-test('late: /checkin during the late window posts the late message', () => {
+test('late: /checkin during the late window posts the still-open message', () => {
   const env = lateSetup({ props: { WEBHOOK_SECRET: 'f'.repeat(64) } });
   env.start(ADMIN);
   at(env, 61);
   env.webhook({ update_id: 1, message: { message_id: 900, from: MEMBER, chat: { id: -1001234567890, type: 'supergroup' }, date: 0, text: '/checkin' } }, 'f'.repeat(64));
-  assert.match(env.visible().find((m) => m.buttons.length).text, /On-time check-in closed at 11:30/);
+  assert.equal(env.visible().find((m) => m.buttons.length).text, '📍 Check-in is still open until 12:30.\nTap the button when you arrive.');
 });
 
 test('late: the app\'s settings include the late window, 0 to 720 minutes', () => {
@@ -341,7 +384,7 @@ test('session tab: rank and full name in their own columns, how late, and whethe
   const tab = env.sheet('21 Sep 2026 1030');
   const rows = tab.getRange(1, 1, tab.getLastRow(), 8).getValues();
   assert.match(rows[0][0], /10:30 to 11:30, late until 12:30/);
-  assert.equal(rows[1][0], '2 checked in (1 late) · Alpha 2');
+  assert.equal(rows[1][0], '2 checked in (1 late) · Alpha 2 · 1 not on the nominal roll');
   assert.match(rows[2][0], /On-time check-in closed at 11:30; late check-ins until 12:30/);
   assert.deepEqual(rows[4], ['Group', 'Rank', 'Full name', 'Checked in at', 'Late by', 'Telegram name', 'Username', 'On nominal roll']);
   assert.deepEqual(rows[5].slice(0, 3).concat(rows[5].slice(4)), ['Alpha', 'CPL', 'Tan Wei Ming', '', 'Cy Member', '@cy', 'Yes']);
@@ -433,6 +476,45 @@ test('late: refusals during the late window name when late check-ins end', () =>
   assert.match(env.req('saveSettings', ADMIN2, { radiusM: 900 }).message, /until late check-ins end at 12:30/);
 });
 
+// Owner, 2026-10-19: "if names cannot be matched flag silently in the google sheets, still allow the user to check in".
+test('roll: a name not on the roll still checks in; only the check-in tab flags it, with the count', () => {
+  const env = lateSetup({ groups: ['42M'] });
+  addRoll(env, [['LTA', 'JEK KAI ZHI, HOWARD', 'V42'], ['CPL', 'CHEN FENG, MARCUS', 'V41']], 'Nominal Role', ['Rank', 'Name', 'Group']);
+  env.start(ADMIN);
+  const a = env.checkin(MEMBER);
+  env.saveProfile(MEMBER, 'Howard Jek Kai Zhi', '42M', 'LTA'); // any order: on the roll
+  const b = env.checkin(MEMBER2);
+  const saved = env.saveProfile(MEMBER2, 'Howard Jek', '42M', 'LTA'); // part of a name: not a match
+  assert.deepEqual([a.code, b.code, saved.code], ['CHECKED_IN', 'CHECKED_IN', 'PROFILE_SAVED']);
+  [a, b, saved].forEach((r) => assert.doesNotMatch(JSON.stringify(r), /roll|nominal/i, 'the member is told nothing'));
+  close(env);
+  const tab = env.sheet('21 Sep 2026 1030');
+  const rows = tab.getRange(1, 1, tab.getLastRow(), 8).getValues();
+  assert.equal(rows[1][0], '2 checked in · 42M 2 · 1 not on the nominal roll');
+  assert.deepEqual(rows.slice(5).map((r) => [r[2], r[7]]), [['Howard Jek Kai Zhi', 'Yes'], ['Howard Jek', 'No']]);
+  const colours = tab.getRange(6, 8, 2, 1).getBackgrounds().map((r) => r[0]);
+  assert.deepEqual(colours, ['#ffffff', '#fce5cd'], 'the "No" stands out');
+  // A correction on the Members tab (while the check-in is open) clears the flag on the next run.
+  const members = env.sheet('Members');
+  const row = members.getRange(1, 1, members.getLastRow(), 2).getValues().findIndex((r) => String(r[0]) === String(MEMBER2.id)) + 1;
+  members.getRange(row, 2).setValue('Jek Kai Zhi Howard');
+  close(env);
+  assert.equal(tab.getRange(2, 1).getValue(), '2 checked in · 42M 2');
+  assert.deepEqual(tab.getRange(6, 8, 2, 1).getBackgrounds().map((r) => r[0]), ['#ffffff', '#ffffff']);
+});
+
+test('roll: with no Nominal Roll tab the check-in tab has no flags at all', () => {
+  const env = lateSetup();
+  env.start(ADMIN);
+  env.checkin(MEMBER);
+  env.saveProfile(MEMBER, 'Anyone At All', '', 'CPL');
+  close(env);
+  const tab = env.sheet('21 Sep 2026 1030');
+  assert.equal(tab.getRange(2, 1).getValue(), '1 checked in');
+  assert.equal(tab.getRange(6, 8).getValue(), '');
+  assert.equal(tab.getRange(6, 8).getBackgrounds()[0][0], '#ffffff');
+});
+
 test('late: if the new check-in can\'t be saved, the old late window carries on', () => {
   const env = lateSetup();
   env.start(ADMIN);
@@ -441,7 +523,7 @@ test('late: if the new check-in can\'t be saved, the old late window carries on'
   assert.equal(env.start(ADMIN2).code, 'SERVER_ERROR');
   env.setPropertyThrows = null;
   assert.equal(env.records('Sessions')[0].late_until.getTime(), T0 + 120 * MIN);
-  assert.equal(env.checkin(MEMBER).data.late, true);
+  assert.equal(env.checkin(MEMBER).data.openUntilText, '12:30');
 });
 
 test('roll: the same name twice is flagged, not coloured; rows with no name keep the owner\'s colours', () => {

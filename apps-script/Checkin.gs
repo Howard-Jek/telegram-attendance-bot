@@ -37,11 +37,12 @@ function handleCheckin_(ctx, body) {
   // A repeat tap, or the app's backup copy of this request, is answered from the copy of who has
   // checked in without queueing for the lock (which matters when a whole crowd checks in at once).
   // The copy only says "yes" once the row is committed, so this can never let a duplicate in.
-  const openNow = findActiveSession_(sessionsForRead_(), now_().getTime());
+  const nowMs = now_().getTime();
+  const openNow = findActiveSession_(sessionsForRead_(), nowMs);
   const known = openNow ? knownCheckin_(openNow, user.id) : undefined;
   if (known) {
     return reply_(true, 'ALREADY_CHECKED_IN', 'You already checked in at ' + hhmm_(known.at) + '.',
-      Object.assign(checkinView_(openNow, known.at), profile));
+      Object.assign(checkinView_(openNow, known.at, nowMs, isAdmin), profile));
   }
 
   // 4. Everything that reads-then-writes happens under the script lock.
@@ -64,7 +65,7 @@ function handleCheckin_(ctx, body) {
     }
     if (prior) {
       return reply_(true, 'ALREADY_CHECKED_IN', 'You already checked in at ' + hhmm_(prior.at) + '.',
-        Object.assign(checkinView_(session, prior.at), profile));
+        Object.assign(checkinView_(session, prior.at, now.getTime(), isAdmin), profile));
     }
 
     if (!loc) return reply_(false, 'BAD_REQUEST', 'Could not read your location. Please try again.');
@@ -89,7 +90,9 @@ function handleCheckin_(ctx, body) {
       return outOfRange_(session, user, distance, cfg, isAdmin, now);
     }
 
-    // 9. Accept, on time or late (minutes_late is blank when on time).
+    // 9. Accept, on time or late (minutes_late is blank when on time). Only the Sheet says so
+    // (minutes_late here; the check-in's tab and the Nominal Roll read it): the owner asked that
+    // people checking in late are just told they're checked in.
     const p = profile.profile;
     const late = lateness_(session, now);
     sheet_(SHEETS_.LOG).appendRow([now, session.id, Number(user.id), textCell_(user.firstName),
@@ -100,8 +103,8 @@ function handleCheckin_(ctx, body) {
     // keeps the time each holds the lock, and so the queue in a crowd, as short as possible.
     SpreadsheetApp.flush(); // the copy may only say "checked in" once the row is really there
     rememberCheckin_(session, user.id, now, now);
-    return reply_(true, 'CHECKED_IN', 'Checked in' + (late.late ? ' late' : '') + ' at ' + hhmm_(now) + '.',
-      Object.assign(checkinView_(session, now), profile));
+    return reply_(true, 'CHECKED_IN', 'Checked in at ' + hhmm_(now) + '.',
+      Object.assign(checkinView_(session, now, now.getTime(), isAdmin), profile));
   });
 
   return result || reply_(false, 'BUSY', MESSAGES_.BUSY);
@@ -202,13 +205,22 @@ function logRejectedIfSessionOpen_(user, reason) {
   appendRejected_(now, session.id, user, reason, null, null);
 }
 
-function checkinView_(session, at) {
-  return Object.assign({
+/**
+ * What someone is told about their check-in. Nothing in it says whether they were late (the Log
+ * has that); openUntilText is when check-in closes, as of nowMs. A member past the on-time window
+ * gets that as the closing time too, as in memberSessionView_, so an old copy of the app reads
+ * "Check-in closes at 12:30." Admins keep the real window.
+ */
+function checkinView_(session, at, nowMs, isAdmin) {
+  const openUntil = nowMs < session.closesAt.getTime() ? session.closesAt : session.lateUntil;
+  const closes = isAdmin ? session.closesAt : openUntil;
+  return {
     sessionId: session.id,
     at: at.toISOString(),
     atText: hhmm_(at),
-    closesAt: session.closesAt.toISOString(),
-    closesAtText: hhmm_(session.closesAt),
+    closesAt: closes.toISOString(),
+    closesAtText: hhmm_(closes),
     lateUntilText: hhmm_(session.lateUntil),
-  }, lateness_(session, at));
+    openUntilText: hhmm_(openUntil),
+  };
 }

@@ -9,7 +9,7 @@
   var sc = window.SCENARIOS[name];
   if (!sc) throw new Error('Unknown scenario: ' + name);
   var theme = window.THEMES[params.get('theme') || 'light'];
-  var log = (window.__mini = { scenario: name, calls: [], confirmed: [], openedSettings: 0, closed: 0, nativeConfirms: 0, openedLinks: [], timeline: [], vias: [] });
+  var log = (window.__mini = { scenario: name, calls: [], confirmed: [], haptics: [], openedSettings: 0, closed: 0, nativeConfirms: 0, openedLinks: [], timeline: [], vias: [] });
   var t0 = Date.now();
   function mark(what) { log.timeline.push({ what: what, t: Date.now() - t0 }); } // function declarations are hoisted
   // The page must never fall back to the browser's own confirm() inside Telegram.
@@ -173,7 +173,7 @@
         log.confirmed.push(message);
         setTimeout(function () { popupOpen = false; cb(!!sc.confirm); }, 120);
       },
-      HapticFeedback: { notificationOccurred: function () {} },
+      HapticFeedback: { notificationOccurred: function (type) { log.haptics.push(type); } },
       openTelegramLink: function (url) { log.openedLinks.push(url); },
       enableClosingConfirmation: function () { log.closingConfirmation = true; },
       disableClosingConfirmation: function () { log.closingConfirmation = false; },
