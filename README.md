@@ -75,8 +75,9 @@ is on the start screen, the "Check-in is open" screen, the checked-in screen, an
 **A check-in belongs to the admin who started it.** While it is open, only that admin can change
 the settings or move its check-in point; other admins don't see those buttons, and are told whom
 to ask. When nothing is open, any admin can change the settings. You, as the owner, can always
-change them in the Config tab (and the check-in point on the Sessions tab), for example if an admin
-started one in the wrong place and left.
+change them in the Config tab. If an admin started one in the wrong place and left, the check-in
+point is in the Apps Script editor under Project Settings → Script Properties, as `SITE:<session_id>`
+with `{"lat":…,"lng":…}` (it is not kept in the Sheet, and is deleted when the check-in closes).
 
 - **How long check-in stays open**, 1–720 minutes. This applies from the next session.
 - **How long late check-ins are accepted after that**, 0–720 minutes (0 turns them off). They're
